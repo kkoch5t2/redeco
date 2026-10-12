@@ -1,0 +1,29 @@
+[Unit]
+Description=redeco outbound MCP tunnel (separate OS user)
+Requires=redeco-mcp-isolated.service
+After=redeco-mcp-isolated.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=redeco-tunnel
+Group=redeco-tunnel
+WorkingDirectory=/opt/redeco
+Environment=HOME=/var/lib/redeco-tunnel
+Environment=HEALTH_LISTEN_ADDR=127.0.0.1:8780
+EnvironmentFile=/etc/redeco/tunnel.env
+ExecStart=/opt/redeco/tunnel-client run --profile redeco-isolated
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/redeco-tunnel
+PrivateTmp=true
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
