@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pwd
 import re
 import shutil
 import stat
@@ -58,7 +59,7 @@ def _exec(argv: list[str], cwd: Path, timeout: int = 60) -> dict:
         raise ValueError("argv must be a nonempty list of strings")
     if not 1 <= timeout <= 120:
         raise ValueError("timeout must be between 1 and 120 seconds")
-    env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS") if k in os.environ}
+    env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "GRADLE_USER_HOME", "NVM_DIR") if k in os.environ}
     try:
         done = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, timeout=timeout, check=False)
         result = {"exit_code": done.returncode, "stdout": _clean(done.stdout.decode("utf-8", "replace")), "stderr": _clean(done.stderr.decode("utf-8", "replace"))}
@@ -74,7 +75,7 @@ def host_status() -> dict:
     load = os.getloadavg()
     memory = Path("/proc/meminfo").read_text().splitlines()
     disk = shutil.disk_usage(ROOTS[0])
-    return {"host": os.uname().nodename, "load_1_5_15": load, "memory": memory[:3], "disk_bytes": {"total": disk.total, "free": disk.free}, "roots": [str(p) for p in ROOTS]}
+    return {"host": os.uname().nodename, "load_1_5_15": load, "memory": memory[:3], "disk_bytes": {"total": disk.total, "free": disk.free}, "roots": [str(p) for p in ROOTS], "runtime": {"mode": os.environ.get("REDECO_MODE", "isolated"), "user": pwd.getpwuid(os.getuid()).pw_name}}
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))

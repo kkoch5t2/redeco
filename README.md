@@ -26,7 +26,7 @@ ChatGPTとTunnelの中継はOpenAI側にあります。`tunnel-client`、MCPサ�
 
 ## 権限の境界
 
-- MCPは専用OSユーザー `redeco` で動き、作業領域は `/var/lib/redeco/workspaces` に設定します。
+- MCPは、指定した既存OSユーザーで動かす「開発ユーザーモード」と、専用ユーザー `redeco` に隔離するモードを選べます。開発ユーザーモードでは、そのユーザーのホーム、既存プロジェクト、保存済み認証情報にもアクセスできます。
 - トンネルは別のOSユーザー `redeco-tunnel` で動きます。Platformの実行用APIキーは `/etc/redeco/tunnel.env` にroot所有・モード600で保存し、トンネルのプロセス環境にだけ渡します。
 - ChatGPTのカスタムMCPは個人ワークスペースに関連付けたTunnelを使い、現状は「No authentication」です。ローカルMCPポートにも独自の認証はありません。ほかのローカルプロセスからのアクセスには注意してください。
 - `run_command` は任意のプログラムをMCPユーザー権限で実行します。ファイルツールのパス制約と出力の簡易伏字は、コマンド実行には適用できません。信頼しない入力を扱うときはChatGPTのツール呼び出しを確認してください。
@@ -36,24 +36,30 @@ ChatGPTとTunnelの中継はOpenAI側にあります。`tunnel-client`、MCPサ�
 `host_status`, `list_files`, `read_file`, `write_file`, `git_status`, `run_command`, `screenshot`。
 `screenshot` はGUIセッションと撮影ツールが利用できる場合のみ動きます。専用OSユーザーには普段のデスクトップ権限を与えていません。
 
-初期状態では個人の開発リポジトリ、GitHub認証情報、デプロイ資格情報にはアクセスできません。必要になった場合は用途ごとに権限を設計してください。
+通常の開発環境を使いたい場合は開発ユーザーモードを選びます。管理者権限は与えず、`sudo` などの昇格操作はMCPでは扱いません。GitHubプラグインで更新する場合は、MCP側へのGitHub認証の追加は不要です。
 
 ## 新規導入（Ubuntu 24.04）
 
-自分のUbuntuホストと個人のChatGPTワークスペースで使う場合の手順です。端末コマンドはUbuntuで実行します。
+自分のUbuntuホストと個人のChatGPTワークスペースで使う手順です。以下は既存の開発ユーザーでMCPを動かす設定です。Ubuntuの普段使うユーザーの端末から実行してください。
 
 ### 1. MCPを導入
 
 ```bash
 sudo apt update
 sudo apt install -y git python3 python3-venv curl iproute2
+mkdir -p "$HOME/Sites"
+cd "$HOME/Sites"
 git clone https://github.com/kkoch5t2/redeco.git
 cd redeco
-sudo bash ./install_isolated.sh
+sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH"
 systemctl is-active redeco-mcp-isolated.service
 ```
 
-`active` と表示されればMCPは起動しています。このスクリプトが `redeco` ユーザー、`/var/lib/redeco/workspaces`、`/opt/redeco/venv`、ローカルサービスを作成し、仮想環境に依存パッケージをインストールします。MCPの接続先は `http://127.0.0.1:8770/mcp` です。
+`active` なら起動しています。`--user` が実行ユーザー、`--root` がファイルツールとコマンドの作業対象、`--path` が開発ツールの検索先です。`--root` は複数指定できます。指定ユーザーのグループ、ホーム、PATHを使い、MCPは `http://127.0.0.1:8770/mcp` で待ち受けます。
+
+Python仮想環境は `/opt/redeco/venv`、監査ログは `/var/lib/redeco-mcp/<実行ユーザー>` に作成します。実際のユーザー名や個人パスはUbuntu内の `/etc/redeco/mcp.env` とサービス設定に保存し、Gitには追加しません。
+
+専用ユーザーに隔離したい場合は引数なしの `sudo bash ./install_isolated.sh` を使います。その場合の作業領域は `/var/lib/redeco/workspaces` です。
 
 ### 2. PlatformでTunnelと実行用キーを作る
 
@@ -88,7 +94,7 @@ sudo bash ./prepare_isolated_tunnel.sh
 sudo systemctl enable --now redeco-tunnel-isolated.service
 systemctl is-active redeco-tunnel-isolated.service
 curl -fsS http://127.0.0.1:8780/readyz
-/opt/redeco/venv/bin/python ./check_isolated.py
+/opt/redeco/venv/bin/python ./check_runtime.py --mode user --expected-user "$USER"
 ```
 
 `active` と権限境界チェックの `PASS` が出ればUbuntu側の準備は完了です。Tunnelは再起動後も自動起動します。Ubuntu上では `http://127.0.0.1:8780/ui` から状態も確認できます。
@@ -103,7 +109,26 @@ Tunnelが選べない場合はワークスペースの関連付けとTunnels Rea
 
 トンネル単体の追加料金の有無は公開料金表から確定できていません。APIモデル利用はChatGPT Plusとは別課金です。
 
-## 旧構成からの移行
+## 既存環境からの移行
+
+### MCPを開発ユーザーへ変更
+
+更新したリポジトリで次を実行します。ユーザー名や作業対象は自分の環境に合わせて指定してください。
+
+```bash
+git pull --ff-only
+sudo bash ./migrate_mcp_user.sh --user "$USER" --root "$HOME/Sites" --path "$PATH"
+```
+
+同じMCPサービスを再起動するため、移行中はChatGPTの呼び出しが一時的に失敗する場合があります。サービス名は互換性のため `redeco-mcp-isolated.service` のままです。Tunnel IDやAPIキーの入力は不要で、Tunnelのユーザーと設定は維持します。
+
+移行スクリプトはMCPの実行ユーザー、ホーム、作業領域、Tunnelのキー分離を検証します。失敗した場合は保存したMCPファイルと設定へ戻します。設定の控えはUbuntu内の `/etc/redeco/mcp-backup.*` に保存します。
+
+JavaやAndroid SDKなどの変数が必要なら、移行・導入コマンドに `--env "JAVA_HOME=$JAVA_HOME"` などを追加します。対応する変数は `mcp_config.py` の `DEV_ENV` に限定されます。APIキーを `--env` で渡さないでください。
+
+移行後に旧MCP専用アカウントを片付ける場合は `sudo bash ./retire_mcp_user.sh` を実行します。旧ユーザーのプロセスが残っている場合は処理を中断します。アカウントを削除する場合も旧ホームのデータはrootだけが読める `/var/lib/redeco-retired.*` に退避します。
+
+### Tunnelを別ユーザーへ変更
 
 以前の版でMCPとトンネルを同じ `redeco` ユーザーとして設定した場合は、Ubuntuのローカル端末で `sudo bash ./migrate_tunnel_user.sh` を実行します。既存のキーを画面に表示せず、トンネルの設定とサービスを `redeco-tunnel` に移し、稼働と自動起動状態を確認します。途中で失敗した場合は、同じユーザーのままトンネルを再起動せずに診断してください。
 
@@ -115,9 +140,10 @@ Tunnelが選べない場合はワークスペースの関連付けとTunnels Rea
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python smoke_test.py
+python3 -m unittest -v test_mcp_config.py
 ```
 
-`check_isolated.py` は稼働中のローカルMCPに接続し、トンネルとMCPのプロセス権限が分離されていることを、秘密値を読み出さずに検証します。
+`check_runtime.py` は両モードの稼働と権限を検証します。`check_isolated.py` は従来の隔離モード用です。キー分離の確認では、秘密値を読み出さずにファイルやプロセス環境を開けるかだけを検証します。
 
 ## 公開・運用上の注意
 
