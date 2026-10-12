@@ -1,18 +1,28 @@
 # redeco
 
-個人のUbuntuホストで動くMCPサーバー。OpenAI Secure MCP Tunnelを使い、ChatGPTからプライベートなMCPへ接続するための試験実装です。MCP本体は `127.0.0.1:8770`、トンネルの管理画面は `127.0.0.1:8780` で待ち受けます。ルーターのポート開放は不要です。
+個人のUbuntuホストで動くMCPサーバー。OpenAI Secure MCP Tunnelを使い、ChatGPTからプライベートなMCPへ接続するためのツールです。MCP本体は `127.0.0.1:8770`、トンネルの管理画面は `127.0.0.1:8780` で待ち受けます。ルーターのポート開放は不要です。
 
 ## システム構成
 
 ```mermaid
 flowchart TB
-    A["ChatGPT（個人ワークスペース）"] --> B["OpenAI Secure MCP Tunnel"]
-    C["tunnel-client（redeco-tunnel）"] -->|"外向きHTTPS"| B
-    C -->|"localhost"| D["MCPサーバー（redeco）"]
-    D --> E["作業領域"]
+    subgraph cloud["OpenAI側"]
+        chat["ChatGPT"]
+        tunnel["Secure MCP Tunnel"]
+        chat <-->|"ツールの要求・結果"| tunnel
+    end
+    subgraph local["Ubuntu PC（ローカル）"]
+        client["tunnel-client"]
+        mcp["redeco MCPサーバー"]
+        files["作業用ファイル"]
+        client <-->|"localhost"| mcp
+        mcp <-->|"読み書き"| files
+    end
+    client <-->|"Ubuntuから開始するHTTPS接続"| tunnel
 ```
 
-Ubuntu上の `tunnel-client` がOpenAIへ外向きに接続し、同じ端末のMCPへ要求を転送します。MCPと管理画面はローカルでのみ待ち受けます。
+ChatGPTとTunnelの中継はOpenAI側にあります。`tunnel-client`、MCPサーバー、作業用ファイルはUbuntu PC側にあります。
+スマホやブラウザでChatGPTに指示すると、この経路でUbuntuのツールが呼び出されます。Ubuntu側から接続を開始するため、ルーターのポート開放は不要です。
 
 ## 権限の境界
 
