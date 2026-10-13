@@ -122,7 +122,9 @@ sudo bash ./migrate_mcp_user.sh --user "$USER" --root "$HOME/Sites" --path "$PAT
 
 同じMCPサービスを再起動するため、移行中はChatGPTの呼び出しが一時的に失敗する場合があります。サービス名は互換性のため `redeco-mcp-isolated.service` のままです。Tunnel IDやAPIキーの入力は不要で、Tunnelのユーザーと設定は維持します。
 
-移行スクリプトはMCPの実行ユーザー、ホーム、作業領域、Tunnelのキー分離を検証します。失敗した場合は保存したMCPファイルと設定へ戻します。設定の控えはUbuntu内の `/etc/redeco/mcp-backup.*` に保存します。
+移行スクリプトはMCPの起動とローカルのツール検査が通ってからTunnelを起動し、接続準備とキー分離を検証します。失敗した場合は保存したMCPファイルと設定へ戻し、旧MCPの待ち受け開始を確認してからTunnelを起動します。設定の控えはUbuntu内の `/etc/redeco/mcp-backup.*` に保存します。
+
+移行中に `oauth discovery ... connection refused` が出て元の設定に戻った場合は、リポジトリを更新して同じ移行コマンドを再実行してください。成功時は最後に `MCP ready: mode=user user=...` と表示されます。
 
 JavaやAndroid SDKなどの変数が必要なら、移行・導入コマンドに `--env "JAVA_HOME=$JAVA_HOME"` などを追加します。対応する変数は `mcp_config.py` の `DEV_ENV` に限定されます。APIキーを `--env` で渡さないでください。
 
@@ -140,7 +142,7 @@ JavaやAndroid SDKなどの変数が必要なら、移行・導入コマンド�
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python smoke_test.py
-python3 -m unittest -v test_mcp_config.py
+python3 -m unittest -v test_mcp_config.py test_service_lifecycle.py
 ```
 
 `check_runtime.py` は両モードの稼働と権限を検証します。`check_isolated.py` は従来の隔離モード用です。キー分離の確認では、秘密値を読み出さずにファイルやプロセス環境を開けるかだけを検証します。

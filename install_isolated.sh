@@ -25,9 +25,10 @@ done
 if [[ "$print_config" != true && ${EUID} -ne 0 ]]; then
   echo 'Run with sudo on the Ubuntu host' >&2; exit 1
 fi
-for file in server.py requirements.txt mcp_config.py check_runtime.py; do
+for file in server.py requirements.txt mcp_config.py check_runtime.py service_lifecycle.sh; do
   [[ -f "$source_dir/$file" ]] || { echo "Missing source: $file" >&2; exit 1; }
 done
+source "$source_dir/service_lifecycle.sh"
 if [[ "$mode" == user ]]; then
   account="$(getent passwd "$target")" || { echo 'Development account does not exist' >&2; exit 1; }
   IFS=: read -r target _ target_uid _ _ target_home target_shell <<< "$account"
@@ -116,13 +117,21 @@ files=("$unit" "$config_dir/mcp.env" "$app_dir/server.py" "$app_dir/requirements
 for i in "${!files[@]}"; do [[ ! -e "${files[$i]}" ]] || cp -p -- "${files[$i]}" "$backup/$i"; done
 rollback() {
   code=$?; trap - ERR; set +e
+  if [[ "$was_tunnel_active" == true ]]; then systemctl stop redeco-tunnel-isolated.service; fi
   for i in "${!files[@]}"; do
     if [[ -f "$backup/$i" ]]; then cp -p -- "$backup/$i" "${files[$i]}"; else rm -f -- "${files[$i]}"; fi
   done
   systemctl daemon-reload
   if [[ "$was_enabled" != true ]]; then systemctl disable redeco-mcp-isolated.service; fi
   if [[ "$was_active" == true ]]; then systemctl restart redeco-mcp-isolated.service; else systemctl stop redeco-mcp-isolated.service; fi
-  if [[ "$was_tunnel_active" == true ]]; then systemctl start redeco-tunnel-isolated.service; fi
+  if [[ "$was_tunnel_active" == true && "$was_active" == true ]]; then
+    if redeco_wait_mcp_listener; then
+      systemctl start redeco-tunnel-isolated.service
+      redeco_wait_tunnel || echo 'Previous files restored, but tunnel readiness still needs inspection.' >&2
+    else
+      echo 'Previous files restored, but the tunnel remains stopped because MCP is unavailable.' >&2
+    fi
+  fi
   echo "MCP migration failed; previous files restored. Backup: $backup" >&2
   exit "$code"
 }
@@ -134,21 +143,9 @@ install -o root -g root -m 0600 "$staging/mcp.env" "$config_dir/mcp.env"
 install -o root -g root -m 0644 "$staging/mcp.service" "$unit"
 systemctl daemon-reload
 systemctl enable redeco-mcp-isolated.service
-# Requires= can stop the tunnel during an MCP restart; restore its previous running state.
-systemctl restart redeco-mcp-isolated.service
-if [[ "$was_tunnel_active" == true ]]; then systemctl start redeco-tunnel-isolated.service; fi
-check_args=(--mode "$mode" --expected-user "$target")
-[[ "$migrate" == true ]] || check_args+=(--skip-tunnel-check)
-ready=false
-for _ in {1..5}; do
-  if timeout 12 "$app_dir/venv/bin/python" "$app_dir/check_runtime.py" "${check_args[@]}"; then
-    if [[ "$was_tunnel_active" != true ]] || curl --fail --silent --max-time 2 http://127.0.0.1:8780/readyz >/dev/null; then
-      ready=true; break
-    fi
-  fi
-  sleep 1
-done
-[[ "$ready" == true ]]
+# ActiveState=active does not mean Python has opened its listener yet.
+# Discovery failures can persist until the tunnel process is restarted.
+redeco_restart_services "$app_dir/venv/bin/python" "$app_dir/check_runtime.py" "$mode" "$target" "$was_tunnel_active"
 trap - ERR
 echo "MCP ready: mode=$mode user=$target. Service name remains redeco-mcp-isolated.service."
 echo "Previous MCP files saved at $backup. Tunnel settings and key were not replaced."
