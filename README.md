@@ -1,6 +1,8 @@
 # redeco
 
-個人のUbuntuホストで動くMCPサーバー。OpenAI Secure MCP Tunnelを使い、ChatGPTからプライベートなMCPへ接続するためのツールです。MCP本体は `127.0.0.1:8770`、トンネルの管理画面は `127.0.0.1:8780` で待ち受けます。ルーターのポート開放は不要です。
+ChatGPTから個人のUbuntu PCを操作するMCPサーバーです。ファイル編集、Git、ビルド、長時間処理、対話型シェルなどを扱えます。DockerやJenkinsも、実行ユーザーの権限と接続設定の範囲で操作できます。
+
+Ubuntu 24.04・systemdを使う構成です。OpenAI Secure MCP Tunnelで接続し、ルーターのポート開放は不要です。GUI画面の取得には対応しますが、マウスやキーボードでデスクトップを操作するツールは含みません。
 
 ## システム構成
 
@@ -9,72 +11,66 @@ flowchart TB
     subgraph cloud["OpenAI側"]
         chat["ChatGPT"]
         tunnel["Secure MCP Tunnel"]
-        chat <-->|"ツールの要求・結果"| tunnel
+        chat <-->|"要求・結果"| tunnel
     end
-    subgraph local["Ubuntu PC（ローカル）"]
+    subgraph local["Ubuntu PC"]
         client["tunnel-client"]
         mcp["redeco MCPサーバー"]
-        files["作業用ファイル"]
+        files["コマンド・ファイル"]
         client <-->|"localhost"| mcp
-        mcp <-->|"読み書き"| files
+        mcp <-->|"実行・読み書き"| files
     end
     client <-->|"Ubuntuから開始するHTTPS接続"| tunnel
 ```
 
-ChatGPTとTunnelの中継はOpenAI側にあります。`tunnel-client`、MCPサーバー、作業用ファイルはUbuntu PC側にあります。
-スマホやブラウザでChatGPTに指示すると、この経路でUbuntuのツールが呼び出されます。Ubuntu側から接続を開始するため、ルーターのポート開放は不要です。
+`tunnel-client`がUbuntu側からOpenAIへ接続し、同じPC上のMCPサーバーへ要求を転送します。
 
-## 権限の境界
-
-- MCPの実行方式は導入時に選べます。既存ユーザーで動かす場合は、そのユーザーのホーム、既存プロジェクト、保存済み認証情報にもアクセスできます。専用ユーザー `redeco` で動かす場合は、普段のホームから隔離します。
-- トンネルは別のOSユーザー `redeco-tunnel` で動きます。Platformの実行用APIキーは `/etc/redeco/tunnel.env` にroot所有・モード600で保存し、トンネルのプロセス環境にだけ渡します。
-- ChatGPTのカスタムMCPは個人ワークスペースに関連付けたTunnelを使い、現状は「No authentication」です。ローカルMCPポートにも独自の認証はありません。ほかのローカルプロセスからのアクセスには注意してください。
-- `run_command` と `start_process` は任意のプログラムをMCPユーザー権限で実行します。ファイルツールのパス制約は、コマンドによるファイルアクセス全体を制限するものではありません。出力の簡易伏字も秘密情報の完全な除去は保証しません。信頼しない入力を扱うときはChatGPTのツール呼び出しを確認してください。
-
-## ツール
-
-`host_status`, `list_files`, `read_file`, `write_file`, `git_status`, `run_command`, `start_process`, `read_process_output`, `write_process_input`, `stop_process`, `list_processes`, `screenshot`。
-`screenshot` はGUIセッションと撮影ツールが利用できる場合のみ動きます。隔離モードの `redeco` ユーザーには普段のデスクトップ権限を与えていません。
-
-通常の開発環境を使いたい場合は開発ユーザーモードを選びます。sudoは初期状態では無効です。必要な場合だけ、後述のオプションで有効化します。GitHubプラグインで更新する場合は、MCP側へのGitHub認証の追加は不要です。
-
-### 長時間処理・対話操作
-
-| ツール | 用途 |
+| 用途 | ローカルの接続先 |
 | --- | --- |
-| `run_command` | 最大120秒の短い非対話コマンド。タイムアウト時はプロセスグループを停止 |
-| `start_process` | 実行時間の上限なしで開始し、`session_id` を返す。`interactive=true` でPTYを割り当て |
-| `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
-| `write_process_input` | 実行中のセッションへ追加入力。改行で送信、PTYではCtrl+C（`\u0003`）・Ctrl+D（`\u0004`）も利用可能 |
-| `stop_process` | セッションと同じOSセッション内のプロセスグループへTERMを送り、終了しなければKILL |
-| `list_processes` | redecoが管理している実行中・完了済みセッションを一覧表示 |
+| MCPサーバー | `http://127.0.0.1:8770/mcp` |
+| トンネルの準備状態 | `http://127.0.0.1:8780/readyz` |
+| トンネルの管理画面 | `http://127.0.0.1:8780/ui` |
 
-例えば `start_process(argv=["bash"], cwd="作業ディレクトリの絶対パス", interactive=true)` でシェルを起動し、返されたIDを使って `write_process_input(text="pwd\n", session_id="...")` と指示できます。シェル構文が必要な単発処理は `argv=["bash", "-lc", "コマンド文字列"]` と明示します。
+## 実行モードと権限
 
-開始に成功した処理は、結果がまだ出ていなくても再度開始せず、同じIDで経過を確認してください。一度の呼び出しで待つ時間は最大3秒です。画面描画型の端末アプリは制御文字を含むテキスト出力になり、GUIのようには表示されません。
+### MCPを動かすユーザーを選ぶ
 
-出力は各セッションの直近256 KiBを保持し、1回最大12,000バイトずつ取得します。古い出力を破棄した場合は `truncated=true` を返します。全ログが必要ならコマンド側でファイルにも保存してください。同時実行は最大16件、完了済みを含め最大64件を保持します。入力本文は監査ログに保存しませんが、実行先のプログラム自身が入力を表示・保存する可能性はあります。
+| モード | MCPの実行ユーザー | 利用範囲 |
+| --- | --- | --- |
+| 開発ユーザーモード | 指定した既存ユーザー | そのユーザーのホーム、プロジェクト、開発ツール、保存済み認証情報 |
+| 隔離モード（既定） | 専用ユーザー `redeco` | 専用の作業領域 `/var/lib/redeco/workspaces` への書き込み。普段のホームへのアクセスは遮断 |
 
-セッションと出力はメモリー上の管理です。MCPサービスの再起動・PCの再起動で失われ、サービス停止時には子プロセスも終了します。`setsid` や別サービスへの委譲で切り離した処理は、このセッション機能の停止対象には含まれません。PC再起動をまたぐジョブはsystemdやJenkinsで管理してください。
+普段の開発環境を使う場合は開発ユーザーモードを選びます。どちらも、トンネルは別の専用ユーザー `redeco-tunnel` で動かします。MCP用ユーザーは導入手順2、トンネル用ユーザーは手順4で準備します。
 
-## 新規導入（Ubuntu 24.04）
+### sudoを使うか選ぶ
 
-自分のUbuntuホストと個人のChatGPTワークスペースで使う手順です。Ubuntuの普段使うユーザーの端末から実行してください。
+sudoは既定で無効です。開発ユーザーモードでのみ、次のオプションを選べます。
 
-### 1. MCPの実行方式を選ぶ
+| 指定 | 動作 |
+| --- | --- |
+| 指定なし | MCPサービスの権限昇格を禁止 |
+| `--allow-sudo` | sudo実行を許可。対象ユーザーの既存のsudo権限・認証設定に従う |
+| `--allow-sudo --sudo-nopasswd` | 上記に加え、対象ユーザーの全コマンドをパスワード不要でsudo実行できるように設定 |
 
-最初に、次のどちらでMCPを動かすか選びます。
+`--allow-sudo`だけでは新しいsudo権限を付与しません。非対話実行には `sudo -n` を使い、パスワードが必要なら待ち続けずに失敗します。管理者権限で起動した子プロセスの停止にも、非対話で使えるsudo権限が必要です。パスワードをチャットやコマンド引数に書かないでください。
 
-| 方式 | MCPの実行ユーザー | アクセス範囲 | 作成するOSユーザー |
-| --- | --- | --- | --- |
-| A：開発ユーザーモード | 指定した既存ユーザー | そのユーザーのOS権限で、ホームや既存プロジェクトを利用 | トンネル用の `redeco-tunnel` |
-| B：隔離モード | 専用ユーザー `redeco` | 普段のホームへのアクセスを遮断し、専用の作業領域へ書き込み | MCP用の `redeco` とトンネル用の `redeco-tunnel` |
+`--sudo-nopasswd`は `/etc/sudoers.d/redeco-mcp-<実行ユーザー>` を作ります。この権限はredecoだけでなく、同じOSユーザーのほかのプロセスにも適用されます。設定は `visudo` で検証し、適用失敗時は元へ戻します。
 
-普段の開発環境をそのまま使う場合はA、専用の作業領域で使う場合はBを選びます。どちらでも、トンネルはMCPと別のユーザーで動きます。
+### 権限の境界
 
-### 2. MCPを導入
+- `--root`は専用ファイルツールの対象と、コマンド開始時の作業ディレクトリを指定します。コマンドによるファイルアクセス全体をその内側へ閉じ込める設定ではありません。開発ユーザーモードでは、そのユーザーのOS権限で操作します。
+- MCPサービスは通常ユーザーで動きます。sudoを有効にするとサービスの権限昇格禁止を解除し、sudoでシステム全体の変更や、通常は読めない認証情報へのアクセスも可能になります。
+- トンネルの実行用APIキーは `/etc/redeco/tunnel.env` にroot所有・モード600で保存し、トンネルのプロセス環境に渡します。通常のMCPユーザーからの直接アクセスを防ぎますが、sudoによるroot権限の取得後まで隔離するものではありません。
+- この構成はMCP側の認証を実装しておらず、ChatGPTでは `No authentication` を選びます。ローカルMCPへ到達できるプロセスもツールを呼べるため、ループバックでの待ち受けだけを認証の代わりにはできません。
+- 出力の簡易伏字は秘密情報の完全な除去を保証しません。APIキー、パスワード、秘密鍵、トンネルID、端末固有の設定をGitやチャットへ公開しないでください。
 
-まず、両方式に共通の準備を行います。
+ユーザーが既に承認した範囲の作業について、MCPの説明は毎回の再承認を要求しません。ChatGPT側の確認設定や制限は別の仕組みであり、sudoオプションでは変更できません。
+
+## 新規導入
+
+Ubuntuの普段使うユーザーで端末を開き、順に実行します。管理者権限が必要なコマンドにだけ `sudo` を付けます。
+
+### 1. Ubuntu側を準備する
 
 ```bash
 sudo apt update
@@ -85,146 +81,219 @@ git clone https://github.com/kkoch5t2/redeco.git
 cd redeco
 ```
 
-続いて、選んだ方式のコマンドだけを実行します。
+### 2. MCPサーバーを導入する
 
-**A：開発ユーザーモード**
+選んだモードのコマンドを実行します。
+
+**開発ユーザーモード**
 
 ```bash
 sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH"
 ```
 
-この例では、現在ログインしているユーザーでMCPを動かします。`--user` に別の既存ユーザー名を指定することもできます。その場合は `--root` と `--path` も対象ユーザーの環境に合わせてください。新しく `redeco` ユーザーを作る工程はありません。
+| オプション | 指定内容 |
+| --- | --- |
+| `--user` | MCPを動かす既存ユーザー。`root`、`redeco`、`redeco-tunnel`は指定不可 |
+| `--root` | 対象ユーザーが読み書きできる既存ディレクトリ。複数指定可 |
+| `--path` | 開発ツールを探すPATH。省略時は対象ユーザーの `.local/bin`・`bin` と標準PATH |
+| `--env KEY=VALUE` | JavaやAndroid SDKなどの環境変数。対応する変数は [mcp_config.py](mcp_config.py) の `DEV_ENV` を参照 |
+| `--allow-sudo`、`--sudo-nopasswd` | 必要な場合だけ、上の導入コマンドに追加 |
 
-- `--user`：MCPを動かす既存ユーザー。root、`redeco`、`redeco-tunnel` は指定できません。
-- `--root`：ファイルツールの対象と、コマンドの作業ディレクトリ。読み書きできる既存ディレクトリを指定します。複数指定も可能です。
-- `--path`：Javaなどの開発ツールを探すPATH。指定ユーザーのホームとグループも使用します。
+`--user`を使うと、新しいMCP用の `redeco` ユーザーは作りません。別の既存ユーザーを指定する場合は、作業ディレクトリ、PATH、環境変数も対象ユーザーに合わせます。例えばJavaを利用するなら、導入コマンドに `--env "JAVA_HOME=$JAVA_HOME"` を追加します。APIキーを `--env` で渡さないでください。
 
-`run_command` は指定ユーザーのOS権限で動くため、コマンドによるファイルアクセスを `--root` の内側だけに制限する設定ではありません。既存の認証情報にもアクセスできることを理解して選んでください。
-
-JavaやAndroid SDKなどの環境変数が必要なら、導入コマンドに `--env "JAVA_HOME=$JAVA_HOME"` などを追加します。対応する変数は `mcp_config.py` の `DEV_ENV` に限定されます。APIキーを `--env` で渡さないでください。
-
-**Aでsudoを使う場合（任意）**
-
-既存のOSのsudo権限を使う場合は `--allow-sudo` を追加します。
-
-```bash
-sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH" --allow-sudo
-```
-
-これだけではsudo権限やパスワード不要の権限は新規付与しません。短い非対話コマンドでは `sudo -n` を使用し、パスワードが必要なら待ち続けずに失敗します。対話セッションからのsudoはOSの認証に従います。パスワードをチャットや引数に書かないでください。
-
-sudoで起動した子プロセスの停止にも管理者権限が必要です。停止処理は必要な場合だけ `sudo -n` を使用するため、非対話で停止するには対象ユーザーのsudoポリシーがこれを許可している必要があります。
-
-パスワード入力なしで管理操作も任せる環境では、さらに `--sudo-nopasswd` を追加します。
-
-```bash
-sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH" --allow-sudo --sudo-nopasswd
-```
-
-この追加オプションは `/etc/sudoers.d/redeco-mcp-<実行ユーザー>` に、対象ユーザーの全コマンドをパスワード不要とするsudoers設定を作ります。`visudo` で構文を検証し、更新失敗時は元へ戻します。これはredecoからの実行だけでなく、同じOSユーザーのほかのプロセスにも適用されます。
-
-両オプションは開発ユーザーモード専用で、隔離モードでは指定できません。MCP本体は引き続き通常ユーザーで動かしますが、sudoを有効にするとsystemdの権限昇格禁止を解除します。パスワード不要の全権限を付けた場合、MCPへアクセスできるプロセスからシステム全体の変更やトンネル認証情報へのアクセスも可能になります。ローカルMCPポート自体に認証がないことを理解して選んでください。
-
-無効に戻すときは、同じユーザーで両オプションを外して再実行します。redecoが管理する対象ユーザーのsudoers設定だけを削除し、サービスの権限昇格禁止を復元します。他で設定したsudo権限は変更しません。別ユーザーへ切り替えて再導入する場合、旧ユーザーへの付与は旧ユーザーを指定して解除してください。更新時にも、使い続けるオプションを明示してください。
-
-ユーザーが既に承認した範囲の作業について、MCP側の説明は毎回の再承認を要求しません。ChatGPTや接続クライアント側の確認・承認機能は別の仕組みであり、これらのオプションでは解除できません。
-
-**B：隔離モード**
+**隔離モード**
 
 ```bash
 sudo bash ./install_isolated.sh
 ```
 
-MCP用のOSユーザー `redeco` と、作業領域 `/var/lib/redeco/workspaces` を作ります。ChatGPTから扱うプロジェクトはこの作業領域に配置し、ローカル端末から配置する場合は所有者を `redeco` にしてください。普段のユーザーのホームや認証情報は利用できません。
+専用ユーザー `redeco` と作業領域 `/var/lib/redeco/workspaces` を作ります。ここへプロジェクトを配置し、所有者を `redeco` にしてください。普段のユーザーのホームや認証情報は利用しません。
 
-**共通の起動確認**
+**起動確認**
 
 ```bash
 systemctl is-active redeco-mcp-isolated.service
 ```
 
-`active` なら起動しています。スクリプト名とサービス名は両方式で共通です。MCPは `http://127.0.0.1:8770/mcp` で待ち受け、Python仮想環境は `/opt/redeco/venv` に作成します。
+`active`を確認します。`install_isolated.sh`とサービス名は両モードで共通です。名前に `isolated` が含まれていても、実行モードは導入オプションで決まります。
 
-監査ログはAでは `/var/lib/redeco-mcp/<実行ユーザー>`、Bでは `/var/lib/redeco` に保存します。実際のユーザー名や個人パスはUbuntu内の `/etc/redeco/mcp.env` とサービス設定に保存し、Gitには追加しません。
+### 3. OpenAI側でトンネルとキーを用意する
 
-### 3. PlatformでTunnelと実行用キーを作る
+1. [PlatformのTunnels設定](https://platform.openai.com/settings/organization/tunnels)でトンネルを作り、利用するChatGPTワークスペースへ関連付けます。
+2. `tunnel-client`用の実行用APIキーを用意します。トンネルの作成・編集にはTunnelsのRead + Manage、実行とChatGPTでの選択にはRead + Useが必要です。
 
-1. [Tunnels設定](https://platform.openai.com/settings/organization/tunnels)でTunnelを作り、利用する個人のChatGPTワークスペースに関連付けます。Tunnel ID（`tunnel_...`）を控えてください。作成にはTunnelsのRead + Manage権限が必要です。
-2. [API keys設定](https://platform.openai.com/settings/organization/api-keys)で `tunnel-client` 用の実行キーを用意します。実行にはTunnelsのRead + Use権限が必要です。管理用キーと分けてください。
+トンネルIDとキーは次のUbuntu側の対話設定で入力します。利用可能な接続方法や権限は、[OpenAI公式のトンネル手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)も確認してください。
 
-IDとキーの実値はGitやチャットに貼らないでください。
+### 4. トンネルクライアントを配置・設定する
 
-### 4. 公式 `tunnel-client` を配置
-
-[OpenAI公式のTunnel手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)から、UbuntuのCPUに合うクライアントを取得・展開します。Platformのダウンロードリンクまたは公式リリースを利用し、実行ファイルを `~/.local/bin/tunnel-client` に配置してください。
+Platformのダウンロードリンクまたは公式手順から、UbuntuのCPUに合う公式 `tunnel-client` を取得・展開します。次の `/path/to/tunnel-client` は、展開した実行ファイルの実際の場所へ置き換えます。
 
 ```bash
 uname -m
 mkdir -p "$HOME/.local/bin"
-# 次の /path/to/tunnel-client は展開した実行ファイルの実際の場所に置き換える
 install -m 0755 /path/to/tunnel-client "$HOME/.local/bin/tunnel-client"
 "$HOME/.local/bin/tunnel-client" help quickstart
+sudo TUNNEL_CLIENT_BIN="$HOME/.local/bin/tunnel-client" bash ./prepare_isolated_tunnel.sh
 ```
 
-違う場所に置いた場合は、次の設定コマンドを `sudo TUNNEL_CLIENT_BIN=/実際の/絶対パス/tunnel-client bash ./prepare_isolated_tunnel.sh` に置き換えます。
+Ubuntu端末でトンネルIDと実行用APIキーを入力します。キーの入力は画面に表示されません。スクリプトは `redeco-tunnel` ユーザーを作成し、クライアントを `/opt/redeco/tunnel-client` へ配置して `doctor` を実行します。`RESULT ok`を確認してください。この段階ではトンネルはまだ起動しません。
 
-### 5. Tunnelを設定して常時起動
-
-```bash
-sudo bash ./prepare_isolated_tunnel.sh
-```
-
-質問されたTunnel IDと実行用APIキーをUbuntuの端末で入力します。キーは画面に表示されません。スクリプトは `redeco-tunnel` ユーザーを作り、キーをリポジトリ外に保存して `doctor` を実行します。`RESULT ok` を確認してください。この段階ではTunnelはまだ停止しています。
+### 5. トンネルを起動して確認する
 
 ```bash
 sudo systemctl enable --now redeco-tunnel-isolated.service
 systemctl is-active redeco-tunnel-isolated.service
 curl -fsS http://127.0.0.1:8780/readyz
-/opt/redeco/venv/bin/python ./check_runtime.py
+/opt/redeco/venv/bin/python /opt/redeco/check_runtime.py
 ```
 
-`check_runtime.py` は実行方式を自動判定します。Aなら `mode=user` と指定ユーザー名、Bなら `mode=isolated` と `user=redeco` を確認してください。`active` と権限境界チェックの `PASS` が出ればUbuntu側の準備は完了です。Tunnelは再起動後も自動起動します。Ubuntu上では `http://127.0.0.1:8780/ui` から状態も確認できます。
+`active`、準備状態の正常応答、検証の `PASS` を確認します。検証結果の `mode`・`user`・`sudo` が選んだ設定と一致していればUbuntu側の準備は完了です。MCPとトンネルはPC再起動後も自動起動します。
 
-### 6. ChatGPTに追加
+`check_runtime.py`はUbuntu端末から実行します。同じMCPサーバーへ接続して検証するため、redecoの `run_command` 内から同期実行すると待ち合わせによるタイムアウトが起きます。
 
-Web版ChatGPTの[Plugins設定](https://chatgpt.com/#settings/Connectors)で `+` → `Add custom MCP server` を選びます。名前を `redeco`、Connectionを `Tunnel`、Authenticationを `No authentication` とし、手順3のTunnelを選択します。警告を確認して作成・インストールしてください。
+### 6. ChatGPTへ追加する
 
-会話で `@redeco` を選び、`host_status` で動作を確認します。外部回線のスマートフォンからも確認できます。ChatGPTからの発見とツール呼び出しには、Tunnelサービスが起動している必要があります。
+Web版ChatGPTの[Plugins設定](https://chatgpt.com/#settings/Connectors)で、`+` → `Add custom MCP server` を選びます。
 
-Tunnelが選べない場合はワークスペースの関連付けとTunnels Read + Use権限を確認してください。接続できない場合は `systemctl status redeco-tunnel-isolated.service` と `curl -fsS http://127.0.0.1:8780/readyz` を確認します。
+| 項目 | 指定内容 |
+| --- | --- |
+| 名前 | 操作対象が分かる名前（例：`redeco`） |
+| Connection | `Tunnel`。手順3のトンネルを選択 |
+| Authentication | `No authentication` |
 
-トンネル単体の追加料金の有無は公開料金表から確定できていません。APIモデル利用はChatGPT Plusとは別課金です。
+警告を確認して作成・インストールし、新しい会話で `@` から対象の接続を選びます。`host_status`で接続先と実行モードを確認してください。外部回線からも、同じ接続を利用できます。
+
+複数PCで使う場合は、PCごとに導入し、別のトンネルとChatGPT側の接続を用意します。接続名で操作対象を区別すれば、PC内のサービス名やフォルダー名は同じで構いません。
 
 ## 導入済み環境の更新
 
-既存のアカウント、作業フォルダー、PATH、JavaやAndroid SDKの環境変数を保持して更新できます。
+実行中の処理を完了させてから、Ubuntu端末で実行します。
 
 ```bash
+cd "$HOME/Sites/redeco"
 git pull --ff-only
 sudo python3 ./upgrade.py
 ```
 
-今回からsudoとパスワード不要の権限を有効にする場合は、2行目を次に置き換えます。
+`upgrade.py`は既存のモード、実行ユーザー、作業ディレクトリ、PATH、対応する開発環境変数、sudoの有効状態とredeco管理のパスワード不要設定を引き継ぎます。既存の仮想環境を使い、トンネルIDやキーは変更しません。サービスを再起動し、MCPのセッションとその出力は失われます。
+
+sudo設定を変更する場合は、最後の行を次のいずれかに置き換えます。
 
 ```bash
+# sudoと、対象ユーザーの全コマンドのパスワード不要設定を有効化
 sudo python3 ./upgrade.py --allow-sudo --sudo-nopasswd
+
+# sudoを無効化し、redecoが管理する対象ユーザーのパスワード不要設定を削除
+sudo python3 ./upgrade.py --disable-sudo
 ```
 
-`upgrade.py` は既存のsudoオプションも保持します。無効に戻す場合は `sudo python3 ./upgrade.py --disable-sudo` を実行します。依存パッケージは既存の仮想環境を使い、トンネル設定やキーは変更しません。再起動で実行中のMCPセッションは終了するため、処理が完了してから更新してください。
+他で設定したsudo権限は変更しません。別ユーザーへ切り替える場合は、旧ユーザーに付与した設定も旧ユーザーを対象に解除してください。`install_isolated.sh`の再実行は既存設定を自動継承しないため、通常の更新には `upgrade.py` を使います。
+
+ツールの追加や説明・引数の変更後は、サーバー更新に加えてChatGPT側の更新も行います。
+
+1. [Plugins設定](https://chatgpt.com/#settings/Connectors)で対象の接続を開き、`Refresh`を選びます。
+2. ツール一覧に変更が反映されたことを確認します。
+3. 新しい会話で対象の接続を選び、変更したツールを確認します。
+
+詳しくは[公式のメタデータ更新手順](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata)を参照してください。PC側の再起動だけでChatGPT側の一覧更新が完了するとは限りません。
+
+## ツールの使い方
+
+### 状態確認・ファイル・Git
+
+| ツール | 用途と制限 |
+| --- | --- |
+| `host_status` | PCの負荷・メモリー・ディスク容量、作業ディレクトリ、実行ユーザー、sudoとセッション機能の有効状態 |
+| `list_files` | 指定ディレクトリ直下の一覧。最大200件 |
+| `read_file` | UTF-8ファイルの読み取り。最大16,000バイト |
+| `write_file` | UTF-8ファイルの作成・置換。最大65,536バイト。既存ファイルの置換には変更前のSHA-256が必要 |
+| `git_status` | 作業ツリーの状態と差分の概要 |
+| `screenshot` | GUIセッションと撮影ツールが利用できる場合に画面を取得。隔離モードでは普段のデスクトップ権限を与えない |
+
+専用ファイルツールは `--root` 配下が対象で、`.env`・`.ssh`など一部の認証情報へのアクセスを拒否します。大きなファイルやバイナリーは、コマンド側で必要な範囲を処理します。
+
+### コマンド・長時間処理・対話操作
+
+| ツール | 用途 |
+| --- | --- |
+| `run_command` | 短い非対話コマンド。既定60秒、最大120秒。タイムアウト時は関連プロセスを停止 |
+| `start_process` | 実行時間の上限なしで開始し、`session_id`を返す。`interactive=true`でPTY（端末）を割り当て |
+| `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
+| `write_process_input` | セッションへ追加入力。改行で送信し、PTYではCtrl+C・Ctrl+Dも利用可能 |
+| `stop_process` | 管理しているOSセッション内のプロセスグループへTERMを送り、必要ならKILL |
+| `list_processes` | redecoが管理する実行中・完了済みセッションの一覧 |
+
+`argv`はプログラム名と引数の配列です。自動的なシェル展開は行いません。シェル構文が必要な場合は `["bash", "-lc", "コマンド文字列"]` のように明示します。
+
+対話型シェルを起動する `start_process` の引数例です。`cwd`は、設定した作業ディレクトリ内の実在するパスに置き換えます。
+
+```json
+{"argv":["bash"],"cwd":"/path/to/project","interactive":true}
+```
+
+返されたIDに対して、`write_process_input`で入力を送ります。
+
+```json
+{"session_id":"<返されたID>","text":"pwd\n"}
+```
+
+Ctrl+CはJSONで `"text":"\u0003"`、Ctrl+Dは `"text":"\u0004"` と表せます。画面描画型の端末アプリは制御文字を含むテキスト出力になり、GUIのようには表示されません。
+
+開始成功後は同じ処理を再度開始せず、IDを使って経過を確認します。`start_process`と `read_process_output` の `wait_ms` は最大3,000ミリ秒です。これは1回の応答を待つ時間で、プロセスの実行時間ではありません。トンネル側にもリクエスト全体の期限があるため、長い処理は短い呼び出しに分けて追跡します。
+
+| セッション管理の上限 | 値 |
+| --- | --- |
+| 同時実行 | 16件 |
+| 完了済みを含む保持数 | 64件。上限に達すると古い完了済みセッションを削除 |
+| 保持する出力 | 各セッションの直近256 KiB |
+| 1回の出力取得 | 最大12,000バイト |
+| 1回の入力 | 最大16,000バイト |
+
+古い出力を破棄すると `truncated=true` を返します。全ログが必要ならコマンド側でファイルにも保存してください。入力本文はredecoの監査ログに保存しませんが、実行先のプログラム自身が表示・保存する場合があります。
+
+セッションはメモリー上で管理し、MCPサービスやPCの再起動で失われます。サービス停止時にはsystemdがサービス配下の子プロセスも終了させます。`stop_process`は `setsid` や別サービスへ委譲して切り離した処理を追跡しません。PC再起動をまたぐジョブはsystemdやJenkinsで管理してください。
+
+## 運用・トラブルシューティング
+
+| 症状 | 確認すること |
+| --- | --- |
+| 接続できない | 下のコマンドでMCP・トンネル・準備状態を確認 |
+| トンネルを選べない | ChatGPTワークスペースとの関連付けとTunnels Read + Use権限 |
+| 新しいツールが見えない | 更新手順の `Refresh` と、新しい会話での再確認 |
+| sudoが失敗する | `host_status`の `runtime.allow_sudo` とOSのsudo設定。`--allow-sudo`だけではパスワード不要にならない |
+| セッションIDが見つからない | MCP再起動や保持上限による削除。実行済みか確認してから再開 |
+| 長いコマンドがタイムアウトする | `start_process`を使い、IDで追跡 |
+
+Ubuntu端末での確認コマンドです。
+
+```bash
+systemctl status redeco-mcp-isolated.service redeco-tunnel-isolated.service
+curl -fsS http://127.0.0.1:8780/readyz
+/opt/redeco/venv/bin/python /opt/redeco/check_runtime.py
+```
+
+| 保存先 | 内容 |
+| --- | --- |
+| `/opt/redeco` | 稼働コード、Python仮想環境、トンネルクライアント |
+| `/etc/redeco/mcp.env` | 実行ユーザー・作業ディレクトリなどのローカル設定 |
+| `/etc/redeco/tunnel.env` | トンネルの実行用APIキー |
+| `/var/lib/redeco-mcp/<実行ユーザー>/audit.jsonl` | 開発ユーザーモードの監査ログ |
+| `/var/lib/redeco/audit.jsonl` | 隔離モードの監査ログ |
+
+コードを公開しても個人のトンネルへのアクセス権は渡りません。設定ファイルやログを共有する際は、秘密情報や端末固有の情報を除いてください。OpenAI側の利用条件・料金・上限は公式案内と利用アカウントの設定を確認してください。
 
 ## 開発・検証
+
+リポジトリのディレクトリで実行します。
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python smoke_test.py
-python3 -m unittest -v test_mcp_config.py test_service_lifecycle.py test_process_sessions.py test_upgrade.py
-# 実際に125秒かけ、従来の120秒を超えて継続することも確認する場合
-.venv/bin/python smoke_test.py --long
+.venv/bin/python -m unittest -v test_mcp_config.py test_service_lifecycle.py test_process_sessions.py test_upgrade.py
+bash -n install_isolated.sh prepare_isolated_tunnel.sh service_lifecycle.sh
 ```
 
-`check_runtime.py` は両モードの稼働と権限を検証します。`check_isolated.py` は隔離モード用の確認コマンドです。キー分離の確認では、秘密値を読み出さずにファイルやプロセス環境を開けるかだけを検証します。
+`smoke_test.py`は一時的なstdioサーバーでプロトコル・ファイル操作・セッション・sudoオプションの分岐を検証し、実際のsudo権限は付与しません。`smoke_test.py --long`では125秒の連続実行も確認します。`check_runtime.py`は稼働サービスを検証し、`check_isolated.py`は隔離モード専用の互換コマンドです。
 
-## 公開・運用上の注意
-
-コードの公開だけでは個人のTunnelへのアクセス権は渡りません。Tunnel IDやAPIキー、端末固有の設定ファイルをコミットしないでください。実際に導入する場合は自分のTunnelと実行用キーを用意してください。
+ライセンスは[MIT](LICENSE)です。
