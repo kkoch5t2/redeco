@@ -216,7 +216,7 @@ sudo python3 ./upgrade.py --disable-sudo
 
 | ツール | 用途 |
 | --- | --- |
-| `run_command` | 短い非対話コマンド。既定60秒、最大120秒。タイムアウト時は関連プロセスを停止 |
+| `run_command` | 短い非対話コマンド。既定60秒、最大120秒。出力を制限して保持し、タイムアウト時は関連プロセスを停止 |
 | `start_process` | 実行時間の上限なしで開始し、`session_id`を返す。`interactive=true`でPTY（端末）を割り当て |
 | `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
 | `write_process_input` | セッションへ追加入力。改行で送信し、PTYではCtrl+C・Ctrl+Dも利用可能 |
@@ -224,6 +224,8 @@ sudo python3 ./upgrade.py --disable-sudo
 | `list_processes` | redecoが管理する実行中・完了済みセッションの一覧 |
 
 `argv`はプログラム名と引数の配列です。自動的なシェル展開は行いません。シェル構文が必要な場合は `["bash", "-lc", "コマンド文字列"]` のように明示します。
+
+`run_command`の標準出力・標準エラーは、それぞれ最大16,000文字で返します。省略がある場合は `stdout_truncated`・`stderr_truncated` を返すため、全出力が必要ならコマンド側でログを保存してください。
 
 対話型シェルを起動する `start_process` の引数例です。`cwd`は、設定した作業ディレクトリ内の実在するパスに置き換えます。
 
@@ -290,7 +292,7 @@ curl -fsS http://127.0.0.1:8780/readyz
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python smoke_test.py
-.venv/bin/python -m unittest -v test_mcp_config.py test_service_lifecycle.py test_process_sessions.py test_upgrade.py
+.venv/bin/python -m unittest discover -v
 bash -n install_isolated.sh prepare_isolated_tunnel.sh service_lifecycle.sh
 ```
 

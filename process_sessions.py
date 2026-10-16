@@ -133,13 +133,42 @@ class ProcessSession:
                     if excess:
                         del self.buffer[:excess]
                         self.base += excess
+                        # Avoid starting retained UTF-8 output inside a character.
+                        while self.buffer and self.buffer[0] & 0xc0 == 0x80:
+                            del self.buffer[:1]
+                            self.base += 1
                     self.condition.notify_all()
+            # Keep the leader unreaped until its session is empty. Its zombie PID
+            # anchors the session ID and prevents signaling a reused PID/group.
+            while not self._leader_exited() or self._has_live_children():
+                time.sleep(.05)
             self.process.wait()
         finally:
             with self.condition:
                 self.finished = True
                 self.condition.notify_all()
             self.close_descriptors()
+
+    def _leader_exited(self):
+        try:
+            return os.waitid(os.P_PID, self.process.pid,
+                             os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        except ChildProcessError:
+            return True  # The collector has already reaped it.
+
+    def _has_live_children(self):
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit() or int(entry.name) == self.process.pid:
+                continue
+            try:
+                if os.getsid(int(entry.name)) != self.process.pid:
+                    continue
+                state = (entry / 'stat').read_text().rsplit(')', 1)[1].split()[0]
+                if state != 'Z':
+                    return True
+            except (OSError, ValueError, IndexError):
+                continue
+        return False
 
     def close_descriptors(self):
         with self.input_lock:
@@ -159,22 +188,22 @@ class ProcessSession:
             end = self.base + len(self.buffer)
             if offset > end:
                 raise ValueError('Offset is beyond available output')
-            if offset == end and not self.finished:
-                self.condition.wait_for(lambda: self.finished or self.base + len(self.buffer) > offset,
-                                        timeout=wait_ms / 1000)
-            start = max(offset, self.base)
-            data = bytes(self.buffer[start - self.base:start - self.base + max_bytes])
-            # Keep UTF-8 characters together across normal page boundaries.
-            if start + len(data) < self.base + len(self.buffer):
-                for count in range(1, min(4, len(data) + 1)):
-                    try:
-                        data.decode('utf-8')
-                        break
-                    except UnicodeDecodeError as exc:
-                        if exc.reason == 'unexpected end of data' and exc.start > 0:
-                            data = data[:exc.start]
-                        else:
-                            break
+            deadline = time.monotonic() + wait_ms / 1000
+            while True:
+                start = max(offset, self.base)
+                data = bytes(self.buffer[start - self.base:start - self.base + max_bytes])
+                # Keep an incomplete trailing character for the next read, including
+                # when the program emits one UTF-8 character in separate writes.
+                try:
+                    data.decode('utf-8')
+                except UnicodeDecodeError as exc:
+                    if exc.reason == 'unexpected end of data' and (
+                            not self.finished or start + len(data) < self.base + len(self.buffer)):
+                        data = data[:exc.start]
+                remaining = deadline - time.monotonic()
+                if data or self.finished or remaining <= 0:
+                    break
+                self.condition.wait(timeout=remaining)
             return {'session_id': self.id, 'pid': self.process.pid,
                     'status': 'exited' if self.finished else 'running',
                     'exit_code': self.process.returncode if self.finished else None,
@@ -187,7 +216,7 @@ class ProcessSession:
         if len(raw) > 16000:
             raise ValueError('Input exceeds 16000 bytes')
         with self.input_lock:
-            if self.closed or self.process.poll() is not None:
+            if self.closed or self.finished or self._leader_exited():
                 raise ValueError('Process has exited')
             fd = self.master if self.interactive else self.process.stdin.fileno()
             os.set_blocking(fd, False)
@@ -208,8 +237,9 @@ class ProcessSession:
         # Signal the whole group, including children after their parent has exited.
         signal_session(self.process, signal.SIGTERM, self.allow_sudo)
         self.thread.join(timeout=1)
-        signal_session(self.process, signal.SIGKILL, self.allow_sudo)
-        self.thread.join(timeout=1)
+        if not self.finished:
+            signal_session(self.process, signal.SIGKILL, self.allow_sudo)
+            self.thread.join(timeout=1)
         return self.read()
 
 

@@ -7,6 +7,7 @@ import json
 import os
 import pwd
 import re
+import selectors
 import shutil
 import signal
 import stat
@@ -79,13 +80,52 @@ def _exec(argv: list[str], cwd: Path, timeout: int = 60) -> dict:
         raise ValueError("timeout must be between 1 and 120 seconds")
     process = subprocess.Popen(argv, cwd=cwd, env=_environment(), stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, start_new_session=True)
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    truncated = {"stdout": False, "stderr": False}
+    limit = MAX_OUTPUT * 4  # Enough bytes for MAX_OUTPUT UTF-8 characters per stream.
+    deadline = time.monotonic() + timeout
+    timed_out = False
+
+    def capture(selector, wait):
+        for key, _ in selector.select(wait):
+            chunk = os.read(key.fd, 8192)
+            if not chunk:
+                selector.unregister(key.fileobj)
+                continue
+            name = key.data
+            room = limit - len(buffers[name])
+            buffers[name].extend(chunk[:room])
+            truncated[name] |= len(chunk) > room
+
+    selector = selectors.DefaultSelector()
+    for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ, name)
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-        result = {"exit_code": process.returncode, "stdout": _clean(stdout.decode("utf-8", "replace")), "stderr": _clean(stderr.decode("utf-8", "replace"))}
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            capture(selector, min(.1, remaining))
+        process.wait(timeout=max(.001, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
+        timed_out = True
         signal_session(process, signal.SIGKILL, ALLOW_SUDO)
-        stdout, _ = process.communicate()
-        result = {"exit_code": None, "stdout": _clean(stdout.decode("utf-8", "replace")), "stderr": "Timed out; process group stopped. Use start_process for long work."}
+        # Detached writers may keep a pipe open. Never wait indefinitely for EOF.
+        drain_deadline = time.monotonic() + .5
+        while selector.get_map() and time.monotonic() < drain_deadline:
+            capture(selector, .05)
+        process.wait(timeout=1)
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    decoded = {name: raw.decode("utf-8", "replace") for name, raw in buffers.items()}
+    result = {"exit_code": None if timed_out else process.returncode,
+              "stdout": _clean(decoded["stdout"]), "stderr": _clean(decoded["stderr"]),
+              **{name + "_truncated": truncated[name] or len(decoded[name]) > MAX_OUTPUT for name in buffers}}
+    if timed_out:
+        result["stderr"] = "Timed out; process group stopped. Use start_process for long work."
     _audit("run_command", result["exit_code"] == 0, executable=Path(argv[0]).name, cwd=str(cwd), exit_code=result["exit_code"])
     return result
 
@@ -112,10 +152,10 @@ def list_files(path: str) -> list[dict]:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
 def read_file(path: str) -> dict:
-    """Use to read UTF-8 source files under an allowed project path, up to 16 KiB."""
+    """Read UTF-8 source files under an allowed project path, up to 16,000 bytes."""
     p = _path(path)
     if not p.is_file() or p.stat().st_size > MAX_OUTPUT:
-        raise ValueError("File missing or larger than 16 KiB")
+        raise ValueError("File missing or larger than 16,000 bytes")
     raw = p.read_bytes()
     content = raw.decode("utf-8")
     _audit("read_file", True, path=str(p), bytes=len(raw))

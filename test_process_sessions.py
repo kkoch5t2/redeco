@@ -87,7 +87,7 @@ class ProcessTests(unittest.TestCase):
         else:
             try:
                 state = status.read_text().rsplit(')', 1)[1].split()[0]
-            except FileNotFoundError:  # Reaped between kill(0) and reading procfs.
+            except (FileNotFoundError, ProcessLookupError):  # Reaped during procfs inspection.
                 pass
             else:
                 self.assertEqual(state, 'Z')
@@ -99,6 +99,36 @@ class ProcessTests(unittest.TestCase):
         session.write('\x03')
         result = self.until(session, lambda r: r['status'] == 'exited')
         self.assertNotEqual(result['exit_code'], 0)
+
+    def test_utf8_character_split_between_program_writes(self):
+        session = self.start("import os,time; os.write(1,bytes([227])); time.sleep(.3); os.write(1,bytes([129,130]))")
+        deadline = time.monotonic() + 2
+        while not session.buffer and time.monotonic() < deadline:
+            time.sleep(.01)
+        first = session.read()
+        self.assertEqual(first['output'], '')
+        self.assertEqual(first['next_offset'], 0)
+        result = self.until(session, lambda r: r['status'] == 'exited')
+        self.assertEqual(result['output'], 'あ')
+        self.assertEqual(result['next_offset'], 3)
+
+    def test_parent_exit_does_not_lose_background_children(self):
+        marker = Path(self.tmp.name) / 'background'
+        code = "import subprocess,sys,pathlib; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(300)'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); pathlib.Path('background').write_text(str(p.pid))"
+        session = self.start(code)
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(marker.exists())
+        self.assertEqual(session.read()['status'], 'running')
+        self.assertEqual(session.stop()['status'], 'exited')
+        child_pid = int(marker.read_text())
+        try:
+            state = Path(f'/proc/{child_pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+        else:
+            self.assertEqual(state, 'Z')
 
     def test_independent_sessions_unknown_ids_and_invalid_offsets(self):
         first = self.start("print('FIRST')")

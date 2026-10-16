@@ -6,3 +6,9 @@ __pycache__/
 audit.jsonl
 *.key
 *.pem
+tunnel.env
+mcp.env
+redeco-isolated.yaml
+*.log
+*.jsonl
+.config/tunnel-client/
