@@ -29,14 +29,33 @@ ChatGPTとTunnelの中継はOpenAI側にあります。`tunnel-client`、MCPサ�
 - MCPの実行方式は導入時に選べます。既存ユーザーで動かす場合は、そのユーザーのホーム、既存プロジェクト、保存済み認証情報にもアクセスできます。専用ユーザー `redeco` で動かす場合は、普段のホームから隔離します。
 - トンネルは別のOSユーザー `redeco-tunnel` で動きます。Platformの実行用APIキーは `/etc/redeco/tunnel.env` にroot所有・モード600で保存し、トンネルのプロセス環境にだけ渡します。
 - ChatGPTのカスタムMCPは個人ワークスペースに関連付けたTunnelを使い、現状は「No authentication」です。ローカルMCPポートにも独自の認証はありません。ほかのローカルプロセスからのアクセスには注意してください。
-- `run_command` は任意のプログラムをMCPユーザー権限で実行します。ファイルツールのパス制約と出力の簡易伏字は、コマンド実行には適用できません。信頼しない入力を扱うときはChatGPTのツール呼び出しを確認してください。
+- `run_command` と `start_process` は任意のプログラムをMCPユーザー権限で実行します。ファイルツールのパス制約は、コマンドによるファイルアクセス全体を制限するものではありません。出力の簡易伏字も秘密情報の完全な除去は保証しません。信頼しない入力を扱うときはChatGPTのツール呼び出しを確認してください。
 
 ## ツール
 
-`host_status`, `list_files`, `read_file`, `write_file`, `git_status`, `run_command`, `screenshot`。
+`host_status`, `list_files`, `read_file`, `write_file`, `git_status`, `run_command`, `start_process`, `read_process_output`, `write_process_input`, `stop_process`, `list_processes`, `screenshot`。
 `screenshot` はGUIセッションと撮影ツールが利用できる場合のみ動きます。隔離モードの `redeco` ユーザーには普段のデスクトップ権限を与えていません。
 
-通常の開発環境を使いたい場合は開発ユーザーモードを選びます。管理者権限は与えず、`sudo` などの昇格操作はMCPでは扱いません。GitHubプラグインで更新する場合は、MCP側へのGitHub認証の追加は不要です。
+通常の開発環境を使いたい場合は開発ユーザーモードを選びます。sudoは初期状態では無効です。必要な場合だけ、後述のオプションで有効化します。GitHubプラグインで更新する場合は、MCP側へのGitHub認証の追加は不要です。
+
+### 長時間処理・対話操作
+
+| ツール | 用途 |
+| --- | --- |
+| `run_command` | 最大120秒の短い非対話コマンド。タイムアウト時はプロセスグループを停止 |
+| `start_process` | 実行時間の上限なしで開始し、`session_id` を返す。`interactive=true` でPTYを割り当て |
+| `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
+| `write_process_input` | 実行中のセッションへ追加入力。改行で送信、PTYではCtrl+C（`\u0003`）・Ctrl+D（`\u0004`）も利用可能 |
+| `stop_process` | セッションと同じOSセッション内のプロセスグループへTERMを送り、終了しなければKILL |
+| `list_processes` | redecoが管理している実行中・完了済みセッションを一覧表示 |
+
+例えば `start_process(argv=["bash"], cwd="作業ディレクトリの絶対パス", interactive=true)` でシェルを起動し、返されたIDを使って `write_process_input(text="pwd\n", session_id="...")` と指示できます。シェル構文が必要な単発処理は `argv=["bash", "-lc", "コマンド文字列"]` と明示します。
+
+開始に成功した処理は、結果がまだ出ていなくても再度開始せず、同じIDで経過を確認してください。一度の呼び出しで待つ時間は最大3秒です。画面描画型の端末アプリは制御文字を含むテキスト出力になり、GUIのようには表示されません。
+
+出力は各セッションの直近256 KiBを保持し、1回最大12,000バイトずつ取得します。古い出力を破棄した場合は `truncated=true` を返します。全ログが必要ならコマンド側でファイルにも保存してください。同時実行は最大16件、完了済みを含め最大64件を保持します。入力本文は監査ログに保存しませんが、実行先のプログラム自身が入力を表示・保存する可能性はあります。
+
+セッションと出力はメモリー上の管理です。MCPサービスの再起動・PCの再起動で失われ、サービス停止時には子プロセスも終了します。`setsid` や別サービスへの委譲で切り離した処理は、このセッション機能の停止対象には含まれません。PC再起動をまたぐジョブはsystemdやJenkinsで管理してください。
 
 ## 新規導入（Ubuntu 24.04）
 
@@ -83,6 +102,32 @@ sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PAT
 `run_command` は指定ユーザーのOS権限で動くため、コマンドによるファイルアクセスを `--root` の内側だけに制限する設定ではありません。既存の認証情報にもアクセスできることを理解して選んでください。
 
 JavaやAndroid SDKなどの環境変数が必要なら、導入コマンドに `--env "JAVA_HOME=$JAVA_HOME"` などを追加します。対応する変数は `mcp_config.py` の `DEV_ENV` に限定されます。APIキーを `--env` で渡さないでください。
+
+**Aでsudoを使う場合（任意）**
+
+既存のOSのsudo権限を使う場合は `--allow-sudo` を追加します。
+
+```bash
+sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH" --allow-sudo
+```
+
+これだけではsudo権限やパスワード不要の権限は新規付与しません。短い非対話コマンドでは `sudo -n` を使用し、パスワードが必要なら待ち続けずに失敗します。対話セッションからのsudoはOSの認証に従います。パスワードをチャットや引数に書かないでください。
+
+sudoで起動した子プロセスの停止にも管理者権限が必要です。停止処理は必要な場合だけ `sudo -n` を使用するため、非対話で停止するには対象ユーザーのsudoポリシーがこれを許可している必要があります。
+
+パスワード入力なしで管理操作も任せる環境では、さらに `--sudo-nopasswd` を追加します。
+
+```bash
+sudo bash ./install_isolated.sh --user "$USER" --root "$HOME/Sites" --path "$PATH" --allow-sudo --sudo-nopasswd
+```
+
+この追加オプションは `/etc/sudoers.d/redeco-mcp-<実行ユーザー>` に、対象ユーザーの全コマンドをパスワード不要とするsudoers設定を作ります。`visudo` で構文を検証し、更新失敗時は元へ戻します。これはredecoからの実行だけでなく、同じOSユーザーのほかのプロセスにも適用されます。
+
+両オプションは開発ユーザーモード専用で、隔離モードでは指定できません。MCP本体は引き続き通常ユーザーで動かしますが、sudoを有効にするとsystemdの権限昇格禁止を解除します。パスワード不要の全権限を付けた場合、MCPへアクセスできるプロセスからシステム全体の変更やトンネル認証情報へのアクセスも可能になります。ローカルMCPポート自体に認証がないことを理解して選んでください。
+
+無効に戻すときは、同じユーザーで両オプションを外して再実行します。redecoが管理する対象ユーザーのsudoers設定だけを削除し、サービスの権限昇格禁止を復元します。他で設定したsudo権限は変更しません。別ユーザーへ切り替えて再導入する場合、旧ユーザーへの付与は旧ユーザーを指定して解除してください。更新時にも、使い続けるオプションを明示してください。
+
+ユーザーが既に承認した範囲の作業について、MCP側の説明は毎回の再承認を要求しません。ChatGPTや接続クライアント側の確認・承認機能は別の仕組みであり、これらのオプションでは解除できません。
 
 **B：隔離モード**
 
@@ -150,13 +195,32 @@ Tunnelが選べない場合はワークスペースの関連付けとTunnels Rea
 
 トンネル単体の追加料金の有無は公開料金表から確定できていません。APIモデル利用はChatGPT Plusとは別課金です。
 
+## 導入済み環境の更新
+
+既存のアカウント、作業フォルダー、PATH、JavaやAndroid SDKの環境変数を保持して更新できます。
+
+```bash
+git pull --ff-only
+sudo python3 ./upgrade.py
+```
+
+今回からsudoとパスワード不要の権限を有効にする場合は、2行目を次に置き換えます。
+
+```bash
+sudo python3 ./upgrade.py --allow-sudo --sudo-nopasswd
+```
+
+`upgrade.py` は既存のsudoオプションも保持します。無効に戻す場合は `sudo python3 ./upgrade.py --disable-sudo` を実行します。依存パッケージは既存の仮想環境を使い、トンネル設定やキーは変更しません。再起動で実行中のMCPセッションは終了するため、処理が完了してから更新してください。
+
 ## 開発・検証
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python smoke_test.py
-python3 -m unittest -v test_mcp_config.py test_service_lifecycle.py
+python3 -m unittest -v test_mcp_config.py test_service_lifecycle.py test_process_sessions.py test_upgrade.py
+# 実際に125秒かけ、従来の120秒を超えて継続することも確認する場合
+.venv/bin/python smoke_test.py --long
 ```
 
 `check_runtime.py` は両モードの稼働と権限を検証します。`check_isolated.py` は隔離モード用の確認コマンドです。キー分離の確認では、秘密値を読み出さずにファイルやプロセス環境を開けるかだけを検証します。

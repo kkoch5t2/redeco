@@ -19,9 +19,11 @@ def env_line(key: str, value: str) -> str:
     return f'{key}="{value}"\n'
 
 
-def render(mode: str, user: str, group: str, home: str, roots: list[str], path: str = "", extra: dict[str, str] | None = None) -> tuple[str, str]:
+def render(mode: str, user: str, group: str, home: str, roots: list[str], path: str = "", extra: dict[str, str] | None = None, allow_sudo: bool = False) -> tuple[str, str]:
     if mode not in {"isolated", "user"}:
         raise ValueError("Unsupported mode")
+    if allow_sudo and mode != "user":
+        raise ValueError("--allow-sudo requires --user (development-user mode)")
     for name in (user, group):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*[$]?", name):
             raise ValueError("Invalid OS account name")
@@ -39,9 +41,10 @@ def render(mode: str, user: str, group: str, home: str, roots: list[str], path: 
     if set(extra) - DEV_ENV:
         raise ValueError("Only documented development/desktop environment variables are accepted")
     state = "/var/lib/redeco" if mode == "isolated" else "/var/lib/redeco-mcp/" + user
-    values = {"HOME": home, "USER": user, "LOGNAME": user, "PATH": path, "REDECO_MODE": mode, "REDECO_TRANSPORT": "streamable-http", "REDECO_ROOTS": ":".join(roots), "REDECO_AUDIT": state + "/audit.jsonl", "REDECO_PORT": "8770", **extra}
+    values = {"HOME": home, "USER": user, "LOGNAME": user, "PATH": path, "REDECO_MODE": mode, "REDECO_TRANSPORT": "streamable-http", "REDECO_ROOTS": ":".join(roots), "REDECO_AUDIT": state + "/audit.jsonl", "REDECO_PORT": "8770", "REDECO_ALLOW_SUDO": "1" if allow_sudo else "0", **extra}
     environment = "".join(env_line(k, v) for k, v in values.items())
     isolation = "ProtectSystem=strict\nProtectHome=true\nReadWritePaths=/var/lib/redeco\nPrivateTmp=true\n" if mode == "isolated" else "ProtectSystem=false\nProtectHome=false\nPrivateTmp=false\n"
+    privileges = "NoNewPrivileges=false\nRestrictSUIDSGID=false\n" if allow_sudo else "NoNewPrivileges=true\nCapabilityBoundingSet=\nRestrictSUIDSGID=true\n"
     unit = f"""[Unit]
 Description=redeco MCP ({mode} mode, local only)
 After=network-online.target
@@ -56,10 +59,9 @@ EnvironmentFile=/etc/redeco/mcp.env
 ExecStart=/opt/redeco/venv/bin/python /opt/redeco/server.py
 Restart=always
 RestartSec=5
-NoNewPrivileges=true
-CapabilityBoundingSet=
+{privileges}KillMode=control-group
 AmbientCapabilities=
-{isolation}RestrictSUIDSGID=true
+{isolation}TimeoutStopSec=10
 UMask=0077
 
 [Install]
@@ -75,6 +77,7 @@ def main() -> None:
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--root", action="append", required=True)
     parser.add_argument("--path", default="")
+    parser.add_argument("--allow-sudo", action="store_true")
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -85,7 +88,7 @@ def main() -> None:
             parser.error("Each --env must be a unique KEY=VALUE")
         extra[key] = value
     try:
-        unit, environment = render(args.mode, args.user, args.group, args.home, args.root, args.path, extra)
+        unit, environment = render(args.mode, args.user, args.group, args.home, args.root, args.path, extra, args.allow_sudo)
     except ValueError as exc:
         parser.error(str(exc))
     args.output.mkdir(parents=True, exist_ok=True)

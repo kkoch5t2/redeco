@@ -59,6 +59,19 @@ class ServiceConfigTest(unittest.TestCase):
         source = Path('server.py').read_text()
         self.assertIn('host="127.0.0.1"', source)
 
+    def test_sudo_is_opt_in_and_user_mode_only(self):
+        unit, env = self.build()
+        self.assertIn('REDECO_ALLOW_SUDO="0"', env)
+        unit, env = self.build(allow_sudo=True)
+        self.assertIn('REDECO_ALLOW_SUDO="1"', env)
+        self.assertIn('NoNewPrivileges=false', unit)
+        self.assertIn('RestrictSUIDSGID=false', unit)
+        self.assertNotIn('CapabilityBoundingSet=', unit)
+        self.assertIn('KillMode=control-group', unit)
+        self.assertNotIn('NOPASSWD', unit + env)
+        with self.assertRaises(ValueError):
+            self.build(mode='isolated', user='redeco', allow_sudo=True)
+
 
 if __name__ == '__main__':
     unittest.main()

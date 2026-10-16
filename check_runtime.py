@@ -16,7 +16,7 @@ async def verify(mode=None, expected_user=None, skip_tunnel=False):
         async with ClientSession(reader, writer) as session:
             await session.initialize()
             names = {tool.name for tool in (await session.list_tools()).tools}
-            assert {"host_status", "read_file", "run_command"} <= names, "Required MCP tools are missing"
+            assert {"host_status", "read_file", "run_command", "start_process", "read_process_output", "write_process_input", "stop_process", "list_processes"} <= names, "Required MCP tools are missing"
             status = await session.call_tool("host_status", {})
             assert not status.isError, "host_status failed"
             info = data(status)
@@ -74,7 +74,8 @@ async def verify(mode=None, expected_user=None, skip_tunnel=False):
                     "print('isolated' if found and not exposed else 'exposed_or_missing')\n"
                 )
                 assert await command(["/usr/bin/python3", "-c", boundary_probe]) == "isolated", "Tunnel key boundary failed"
-            print(f"PASS: MCP tools, mode={mode}, user={identity['user']}, work root, file boundary" + (", tunnel key boundary" if not skip_tunnel else ""))
+            allow_sudo = info.get('runtime', {}).get('allow_sudo', False)
+            print(f"PASS: MCP tools, mode={mode}, user={identity['user']}, sudo={allow_sudo}, work root, file boundary" + (", direct tunnel key access blocked (sudo may override this)" if allow_sudo and not skip_tunnel else ", tunnel key boundary" if not skip_tunnel else ""))
 
 
 def main():
