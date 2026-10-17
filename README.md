@@ -1,8 +1,8 @@
 # redeco
 
-ChatGPTから個人のUbuntu PCを操作するMCPサーバーです。ファイル編集、Git、ビルド、長時間処理、対話型シェルなどを扱えます。DockerやJenkinsも、実行ユーザーの権限と接続設定の範囲で操作できます。
+ChatGPTから個人のUbuntu・Windows PCを操作するMCPサーバーです。ファイル編集、Git、ビルド、長時間処理、対話型シェルなどを扱えます。DockerやJenkinsも、実行ユーザーの権限と接続設定の範囲で操作できます。
 
-Ubuntu 24.04・systemdを使う構成です。OpenAI Secure MCP Tunnelで接続し、ルーターのポート開放は不要です。GUI画面の取得には対応しますが、マウスやキーボードでデスクトップを操作するツールは含みません。
+Ubuntu 24.04・systemdと、Windows 10/11・Python 3.10以降に対応します。Windowsの導入・更新は [Windows版の手順](windows/README.md) を参照してください。以下のsystemd・sudo・隔離ユーザーの説明はUbuntu向けです。OpenAI Secure MCP Tunnelで接続し、ルーターのポート開放は不要です。GUI画面の取得には対応しますが、マウスやキーボードでデスクトップを操作するツールは含みません。
 
 ## システム構成
 
@@ -13,17 +13,17 @@ flowchart TB
         tunnel["Secure MCP Tunnel"]
         chat <-->|"要求・結果"| tunnel
     end
-    subgraph local["Ubuntu PC"]
+    subgraph local["Ubuntu / Windows PC"]
         client["tunnel-client"]
         mcp["redeco MCPサーバー"]
         files["コマンド・ファイル"]
         client <-->|"localhost"| mcp
         mcp <-->|"実行・読み書き"| files
     end
-    client <-->|"Ubuntuから開始するHTTPS接続"| tunnel
+    client <-->|"PCから開始するHTTPS接続"| tunnel
 ```
 
-`tunnel-client`がUbuntu側からOpenAIへ接続し、同じPC上のMCPサーバーへ要求を転送します。
+`tunnel-client`がPC側からOpenAIへ接続し、同じPC上のMCPサーバーへ要求を転送します。
 
 | 用途 | ローカルの接続先 |
 | --- | --- |
@@ -217,7 +217,7 @@ sudo python3 ./upgrade.py --disable-sudo
 | ツール | 用途 |
 | --- | --- |
 | `run_command` | 短い非対話コマンド。既定60秒、最大120秒。出力を制限して保持し、タイムアウト時は関連プロセスを停止 |
-| `start_process` | 実行時間の上限なしで開始し、`session_id`を返す。`interactive=true`でPTY（端末）を割り当て |
+| `start_process` | 実行時間の上限なしで開始し、`session_id`を返す。`interactive=true`でUbuntuではPTY（端末）を割り当て。Windowsではパイプによる行単位の入力に対応 |
 | `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
 | `write_process_input` | セッションへ追加入力。改行で送信し、PTYではCtrl+C・Ctrl+Dも利用可能 |
 | `stop_process` | 管理しているOSセッション内のプロセスグループへTERMを送り、必要ならKILL |

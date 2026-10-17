@@ -12,3 +12,4 @@ redeco-isolated.yaml
 *.log
 *.jsonl
 .config/tunnel-client/
+.venv-windows/
