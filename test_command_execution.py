@@ -24,6 +24,23 @@ class CommandTests(unittest.TestCase):
         cls.server.SESSIONS.close()
         cls.root.cleanup()
 
+    def test_listing_and_access_use_the_same_credential_names(self):
+        root = Path(self.root.name)
+        allowed = root / '.ENV.notes'
+        denied = root / '.env.private'
+        try:
+            allowed.write_text('ordinary case-sensitive filename')
+            denied.write_text('dummy')
+            names = {entry['name'] for entry in self.server.list_files(str(root))}
+            self.assertIn(allowed.name, names)
+            self.assertEqual(self.server.read_file(str(allowed))['content'], allowed.read_text())
+            self.assertNotIn(denied.name, names)
+            with self.assertRaises(ValueError):
+                self.server.read_file(str(denied))
+        finally:
+            allowed.unlink(missing_ok=True)
+            denied.unlink(missing_ok=True)
+
     def test_large_stdout_and_stderr_are_capped(self):
         result = self.server._exec([sys.executable, '-c',
                                    "import os; os.write(1,b'x'*2000000); os.write(2,b'y'*2000000)"],

@@ -54,14 +54,19 @@ def _audit(tool: str, ok: bool, **meta: object) -> None:
     AUDIT.chmod(0o600)
 
 
+def _credential_name(name: str) -> bool:
+    if os.name == "nt":
+        name = name.lower()
+    return name in DENIED_NAMES or name.startswith(".env.")
+
+
 def _path(path: str, *, file_access: bool = True) -> Path:
     candidate = Path(path).expanduser().resolve()
     if not any(candidate == root or candidate.is_relative_to(root) for root in ROOTS):
         raise ValueError("Path is outside configured project roots")
-    parts = [part.lower() if os.name == "nt" else part for part in candidate.parts]
     if os.name == "nt" and (":" in str(candidate)[2:] or str(candidate).startswith("\\\\")):
         raise ValueError("UNC paths and alternate data streams are not exposed by file tools")
-    if file_access and any(part in DENIED_NAMES or part.startswith(".env.") for part in parts):
+    if file_access and any(_credential_name(part) for part in candidate.parts):
         raise ValueError("Credential files are not exposed by file tools")
     return candidate
 
@@ -174,7 +179,11 @@ def list_files(path: str) -> list[dict]:
     p = _path(path)
     if not p.is_dir():
         raise ValueError("Not a directory")
-    result = [{"name": c.name, "directory": c.is_dir()} for c in sorted(p.iterdir()) if (c.name.lower() if os.name == "nt" else c.name) not in DENIED_NAMES and not c.name.lower().startswith(".env.")][:200]
+    result = [
+        {"name": child.name, "directory": child.is_dir()}
+        for child in sorted(p.iterdir())
+        if not _credential_name(child.name)
+    ][:200]
     _audit("list_files", True, path=str(p), count=len(result))
     return result
 
@@ -275,7 +284,7 @@ def write_process_input(session_id: str, text: str) -> dict:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False))
 def stop_process(session_id: str) -> dict:
-    """Stop a redeco session's process group, including children; escalates TERM to KILL. Arbitrary host PIDs are not accepted."""
+    """Stop a managed session and its children. Ubuntu escalates TERM to KILL; Windows terminates the Job Object. Arbitrary host PIDs are not accepted."""
     result = SESSIONS.get(session_id).stop()
     result["output"] = _clean(result["output"])
     _audit("stop_process", True, session_id=session_id)

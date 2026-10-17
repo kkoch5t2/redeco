@@ -4,11 +4,10 @@ import ctypes
 import getpass
 import os
 import platform
-from pathlib import Path
 import subprocess
 import threading
 import time
-from windows_process_sessions import Job
+from windows_process_sessions import spawn_in_job
 
 
 def elevated():
@@ -38,9 +37,7 @@ def host_status():
 
 def execute(argv, cwd, env, timeout, max_output):
     """Use a gated helper and a Job for short commands too; drain both pipes."""
-    import json
-    import sys
-    job = Job()
+    job = None
     process = None
     buffers = {'stdout': bytearray(), 'stderr': bytearray()}
     truncated = {'stdout': False, 'stderr': False}
@@ -54,13 +51,7 @@ def execute(argv, cwd, env, timeout, max_output):
             truncated[name] |= len(chunk) > room
 
     try:
-        process = subprocess.Popen(
-            [sys.executable, '-u', str(Path(__file__).with_name('windows_process_sessions.py')),
-             '--child', json.dumps(argv)], cwd=cwd, env=env,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW, bufsize=0)
-        job.assign(process)
-        process.stdin.write(b'\x00')
+        job, process = spawn_in_job(argv, cwd, env, stderr=subprocess.PIPE)
         process.stdin.close()
         for name in buffers:
             thread = threading.Thread(target=collect, args=(name, getattr(process, name)), daemon=True)
@@ -75,7 +66,8 @@ def execute(argv, cwd, env, timeout, max_output):
             time.sleep(.01)
         process.wait(timeout=5)
     finally:
-        job.close()
+        if job is not None:
+            job.close()
         if process is not None:
             if process.poll() is None:
                 process.kill()

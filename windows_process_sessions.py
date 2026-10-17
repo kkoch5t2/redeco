@@ -100,6 +100,39 @@ class Job:
             self.handle = None
 
 
+def spawn_in_job(argv, cwd, env, *, stderr=subprocess.STDOUT):
+    """Launch user code only after its helper is assigned to a kill-on-close Job.
+
+    The caller owns the returned Job and process, including its standard streams.
+    Launch failures close all handles and reap the helper before propagating.
+    """
+    job = Job()
+    process = None
+    try:
+        # A pythonw supervisor must still launch console Python with valid pipes.
+        # CREATE_NO_WINDOW keeps it hidden without discarding standard streams.
+        python = Path(sys.executable)
+        if python.name.lower() == 'pythonw.exe':
+            python = python.with_name('python.exe')
+        process = subprocess.Popen(
+            [str(python), '-u', str(Path(__file__).resolve()), '--child', json.dumps(argv)],
+            cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=stderr, creationflags=subprocess.CREATE_NO_WINDOW, bufsize=0)
+        job.assign(process)
+        process.stdin.write(b'\x00')
+        return job, process
+    except BaseException:
+        job.close()
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+        raise
+
+
 class ProcessSession:
     def __init__(self, argv, cwd, env, interactive=False):
         self.id = uuid.uuid4().hex
@@ -112,24 +145,15 @@ class ProcessSession:
         self.finished = False
         self.closed = False
         self.input_pending = None
-        self.job = Job()
+        self.job, self.process = spawn_in_job(argv, cwd, env)
         try:
-            self.process = subprocess.Popen(
-                [sys.executable, '-u', str(Path(__file__).resolve()), '--child', json.dumps(argv)],
-                cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW, bufsize=0)
-            self.job.assign(self.process)
-            self.process.stdin.write(b'\x00')
             self.thread = threading.Thread(target=self._collect, daemon=True)
             self.thread.start()
         except BaseException:
             self.job.close()
-            if hasattr(self, 'process'):
-                if self.process.poll() is None:
-                    self.process.kill()
-                self.process.wait(timeout=5)
-                self.process.stdin.close()
-                self.process.stdout.close()
+            self.process.wait(timeout=5)
+            self.process.stdin.close()
+            self.process.stdout.close()
             raise
 
     def _collect(self):

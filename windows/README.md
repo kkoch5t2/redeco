@@ -1,8 +1,10 @@
 # Windows版Redeco
 
+[共通の概要・ツール仕様](../README.md) · [Ubuntu版の手順](../ubuntu/README.md)
+
 Ubuntu版と同じリポジトリ・MCPツールを使い、Windows上で直接コマンド実行、ファイル編集、Git、ビルド、長時間処理、対話入力、画面取得を行います。WSLやUbuntu経由のSSHは不要です。Windows 10/11、Python 3.10以降、Windows PowerShell 5.1以降が対象です。
 
-## 機能と権限
+## 実行モードと権限
 
 | 項目 | Windowsでの動作 |
 | --- | --- |
@@ -20,9 +22,9 @@ Ubuntu版と同じリポジトリ・MCPツールを使い、Windows上で直接�
 
 `-AllowAdmin`は個別コマンドごとの昇格ではなく、MCP全体を管理者権限で動かす選択です。通常モードでのUAC自動承認やUAC無効化は行いません。管理者モードからは保護された認証情報にもアクセス可能になるため、トンネルとの分離を完全な境界とは見なさないでください。
 
-## 導入
+## 新規導入
 
-Git、Pythonと`py`ランチャーを導入してから、普段使うWindowsアカウントのPowerShellで実行します。
+Git、Pythonと`py`ランチャーを導入してから、普段使うWindowsアカウントのPowerShellで実行します。以降のコマンドはリポジトリのルート（`redeco`）で実行します。READMEがある`windows`ディレクトリへ移動する必要はありません。
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\Sites" | Out-Null
@@ -45,10 +47,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install.ps1
 
 設定、監査、ログはリポジトリ外の`$env:LOCALAPPDATA\Redeco`へ保存し、導入ユーザーとSYSTEMだけにアクセスを許可します。仮想環境は`.venv-windows`に作成します。リポジトリを移動する場合は新しい場所でインストーラーを再実行してください。
 
-## 検証と操作例
+## 起動確認と操作例
 
 ```powershell
-.\.venv-windows\Scripts\python.exe -m unittest test_windows -v
 .\.venv-windows\Scripts\python.exe .\windows\check_runtime.py --screenshot
 ```
 
@@ -58,7 +59,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\run.ps1
 ```
 
-MCPの`run_command`にはシェル文字列ではなく、引数配列を渡します。例中のパスは対象PCの設定ルートへ置き換えます。
+ツールの共通仕様・出力制限は[共通README](../README.md#ツールの使い方)を参照してください。MCPの`run_command`にはシェル文字列ではなく、引数配列を渡します。例中のパスは対象PCの設定ルートへ置き換えます。
 
 ```json
 {"argv":["powershell.exe","-NoProfile","-NonInteractive","-Command","Get-Date"],"cwd":"C:\\Projects"}
@@ -81,7 +82,7 @@ Windows MCPのローカル起動と、ChatGPTで使うトンネル・接続の�
 
 詳細は[公式Secure MCP Tunnel手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)を参照してください。MCP自体は認証を実装しておらず、同じPC上でループバックへ到達できるプロセスも呼び出せます。トンネルキーをMCPと同じWindowsアカウントへ保存すると、そのアカウントのコマンドから読み取れるため、分離した構成と説明しないでください。
 
-## 更新・停止・削除
+## 導入済み環境の更新
 
 実行中セッションを完了させてから、同じ作業コピーで更新します。
 
@@ -92,6 +93,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install.ps1
 
 既存のルート、ポート、管理者モードを引き継いでタスクを再登録し、MCPを再起動します。管理者モードを維持する場合は、同じアカウントの管理者PowerShellから実行します。再起動でセッションと保持出力は失われます。
 
+## 停止・削除
+
 自動起動を解除する場合は次を実行します。
 
 ```powershell
@@ -99,3 +102,42 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall.ps1
 ```
 
 現在のユーザーのRedecoタスクだけを停止・削除します。設定・監査・ソース・仮想環境は残します。トンネルは別の設定のため、削除・失効も別途行ってください。
+
+## 運用・トラブルシューティング
+
+| 症状 | 確認すること |
+| --- | --- |
+| ローカルMCPへ接続できない | ログイン状態、Redecoタスクの状態、`server.log`、設定したポート |
+| ローカルMCPは使えるがChatGPTから接続できない | Windows専用トンネルの起動状態とChatGPTへの登録 |
+| 管理者権限が必要な操作に失敗する | `host_status`の`runtime.allow_admin`と`-AllowAdmin`の設定 |
+| 日本語が文字化けする | CLIの出力文字コード。セッションはUTF-8として解釈 |
+| セッションIDが見つからない | MCP再起動や保持上限による削除。実行済みか確認してから再開 |
+| 長いコマンドがタイムアウトする | `start_process`を使い、IDで追跡 |
+
+| 保存先 | 内容 |
+| --- | --- |
+| リポジトリ内の`.venv-windows` | Windows用のPython仮想環境 |
+| `$env:LOCALAPPDATA\Redeco\config.json` | 実行ルート・ポート・管理者モード・リポジトリの場所 |
+| `$env:LOCALAPPDATA\Redeco\audit.jsonl` | ツールの監査ログ |
+| `$env:LOCALAPPDATA\Redeco\server.log` | 監視プロセスとMCPの起動ログ。1MiBごとにローテーションし、過去3世代を保持 |
+
+## 開発・検証
+
+依存関係は新規導入のインストーラーで準備します。リポジトリのルートで実行します。
+
+```powershell
+.\.venv-windows\Scripts\python.exe -m unittest test_windows -v
+```
+
+125秒の連続実行も検証する場合は、このPowerShellセッションだけで環境変数を設定します。
+
+```powershell
+$env:REDECO_TEST_LONG = '1'
+try {
+    .\.venv-windows\Scripts\python.exe -m unittest test_windows -v
+} finally {
+    Remove-Item Env:REDECO_TEST_LONG
+}
+```
+
+`test_windows.py`は一時ディレクトリとstdioのMCPサーバーを使って検証します。稼働中のHTTPサーバーを検証する`windows/check_runtime.py`とは用途を分けています。PowerShellスクリプトの構文確認と、Ubuntuを含む検証の定義は[CI設定](../.github/workflows/tests.yml)を参照してください。

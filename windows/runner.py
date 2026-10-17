@@ -7,12 +7,11 @@ from logging.handlers import RotatingFileHandler
 import msvcrt
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from windows_process_sessions import Job
+from windows_process_sessions import spawn_in_job
 from windows_runtime import environment
 
 
@@ -46,26 +45,19 @@ def main():
                        REDECO_TRANSPORT='streamable-http', REDECO_PORT=str(config['port']),
                        REDECO_ALLOW_ADMIN='1' if config.get('allow_admin') else '0',
                        REDECO_AUDIT=str(state / 'audit.jsonl'))
-            # pythonw suppresses standard streams even with redirected handles.
-            # Keep only the supervisor windowless; run MCP with python.exe and CREATE_NO_WINDOW.
             python = str(Path(sys.executable).with_name('python.exe'))
-            job = Job()
+            job = None
             child = None
             try:
                 # Job handles close automatically if Task Scheduler kills this supervisor.
-                child = subprocess.Popen(
-                    [python, '-u', str(repo / 'windows_process_sessions.py'), '--child',
-                     json.dumps([python, '-u', str(repo / 'server.py')])],
-                    cwd=repo, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW, bufsize=0)
-                job.assign(child)
-                child.stdin.write(b'\0')
+                job, child = spawn_in_job([python, '-u', str(repo / 'server.py')], repo, env)
                 child.stdin.close()
                 for line in child.stdout:
                     logger.info(line.decode('utf-8', 'replace').rstrip())
                 logger.warning('MCP exited: %s; restarting in 5s', child.wait())
             finally:
-                job.close()
+                if job is not None:
+                    job.close()
                 if child is not None:
                     child.wait(timeout=5)
                     child.stdout.close()

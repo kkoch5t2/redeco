@@ -58,6 +58,29 @@ class WindowsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             s.write('after exit')
 
+    def test_assignment_failure_never_executes_user_code(self):
+        from windows_process_sessions import spawn_in_job
+        marker = self.root / 'must-not-run'
+        command = [sys.executable, '-c', f"from pathlib import Path;Path({str(marker)!r}).touch()"]
+        created = []
+        popen = subprocess.Popen
+
+        def launch_real(*args, **kwargs):
+            process = popen(*args, **kwargs)
+            created.append(process)
+            return process
+
+        with patch('windows_process_sessions.Job.assign', side_effect=OSError('assignment failed')), \
+             patch('windows_process_sessions.subprocess.Popen', side_effect=launch_real):
+            with self.assertRaises(OSError):
+                spawn_in_job(command, self.root, self.server._environment(), stderr=subprocess.PIPE)
+            # The gate must never open, and even the unassigned helper is reaped.
+            self.assertEqual(len(created), 1)
+            self.assertIsNotNone(created[0].returncode)
+            self.assertTrue(all(stream.closed for stream in
+                                (created[0].stdin, created[0].stdout, created[0].stderr)))
+        self.assertFalse(marker.exists())
+
     def test_command_bounds_and_timeout(self):
         r = self.server._exec([sys.executable, '-c', "import os; os.write(1,b'x'*2000000); os.write(2,b'y'*2000000)"], self.root)
         self.assertEqual(r['exit_code'], 0)
