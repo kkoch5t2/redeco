@@ -167,7 +167,16 @@ class WindowsTests(unittest.TestCase):
                           f'exit={direct.returncode}, out={direct.stdout[:80]!r}, '
                           f'err={direct.stderr[:120]!r}')
             except subprocess.TimeoutExpired:
-                self.fail(f'Job and direct PowerShell both timed out: {r}')
+                # Compare with the original runner environment without logging it.
+                try:
+                    full = subprocess.run(command, cwd=self.root, env=os.environ.copy(),
+                                          capture_output=True, timeout=10,
+                                          creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.fail(f'Filtered PowerShell timed out: {r}; full environment '
+                              f'exit={full.returncode}, out={full.stdout[:80]!r}, '
+                              f'err={full.stderr[:120]!r}')
+                except subprocess.TimeoutExpired:
+                    self.fail(f'Filtered and full-environment PowerShell timed out: {r}')
         self.assertEqual(r['exit_code'], 0, r)
         self.assertEqual(r['stdout'].strip(), '日本語', r)
 
