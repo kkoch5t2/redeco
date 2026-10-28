@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/redeco-icon.jpg" alt="Redecoのアイコン" width="112" height="112">
+
 # Redeco
 
 **ChatGPTから、Ubuntu・Windowsの開発環境へ。**
@@ -51,20 +53,29 @@ Ubuntu版にはトンネル設定用のスクリプトがあります。Windows�
 ## システム構成
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph cloud["OpenAI側"]
+        direction TB
         chat["ChatGPT"]
         tunnel["Secure MCP Tunnel"]
         chat <-->|"要求・結果"| tunnel
     end
     subgraph local["Ubuntu / Windows PC（ローカル）"]
+        direction TB
         client["tunnel-client"]
         mcp["Redeco MCPサーバー"]
         files["コマンド・ファイル"]
-        client <-->|"localhost"| mcp
+        client <-->|"ローカル接続"| mcp
         mcp <-->|"実行・読み書き"| files
     end
-    client <-->|"PCから開始するHTTPS接続"| tunnel
+    cloud <-->|"HTTPS"| local
+
+    classDef openai fill:#eff6ff,stroke:#93c5fd,color:#172554
+    classDef pc fill:#ecfdf5,stroke:#6ee7b7,color:#064e3b
+    class chat,tunnel openai
+    class client,mcp,files pc
+    style cloud fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
+    style local fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
 ```
 
 `tunnel-client`がPC側からOpenAIへHTTPS接続し、同じPC上のMCPサーバーへ要求を転送します。ルーターのポート開放は必要ありません。接続要件は[OpenAI公式のトンネル手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)を参照してください。
