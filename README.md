@@ -63,8 +63,8 @@ flowchart LR
     subgraph local["Ubuntu / Windows PC（ローカル）"]
         direction TB
         client["tunnel-client"]
-        mcp["Redeco MCPサーバー"]
-        files["コマンド・ファイル"]
+        mcp["Redeco MCP"]
+        files["実行・ファイル"]
         client <-->|"ローカル接続"| mcp
         mcp <-->|"実行・読み書き"| files
     end
