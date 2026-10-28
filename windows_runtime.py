@@ -43,6 +43,7 @@ def execute(argv, cwd, env, timeout, max_output):
     truncated = {'stdout': False, 'stderr': False}
     threads = []
     timed_out = False
+    timeout_state = None
 
     def collect(name, stream):
         while chunk := stream.read(8192):
@@ -61,6 +62,9 @@ def execute(argv, cwd, env, timeout, max_output):
         while process.poll() is None or job.active() or any(t.is_alive() for t in threads):
             if time.monotonic() >= deadline:
                 timed_out = True
+                timeout_state = {'helper_running': process.poll() is None,
+                                 'job_active_count': job.active(),
+                                 'reader_threads_alive': sum(t.is_alive() for t in threads)}
                 job.terminate()
                 # TerminateJobObject is asynchronous: wait for descendants, not
                 # just the helper process, before reporting timeout cleanup.
@@ -86,5 +90,7 @@ def execute(argv, cwd, env, timeout, max_output):
               'stdout': decoded['stdout'], 'stderr': decoded['stderr'],
               **{k + '_truncated': truncated[k] or len(decoded[k]) > max_output for k in buffers}}
     if timed_out:
-        result['stderr'] = 'Timed out; process group stopped (Windows Job). Use start_process for long work.'
+        result['stderr'] = (
+            f'Timed out; process group stopped (Windows Job; state={timeout_state}). '
+            'Use start_process for long work.')
     return result

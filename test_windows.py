@@ -157,6 +157,17 @@ class WindowsTests(unittest.TestCase):
             r = self.server._exec(command, self.root, 15)
             if r['exit_code'] is not None:
                 break
+        if r['exit_code'] is None:
+            # Identify a hosted-runner PowerShell failure vs. our Job wrapper.
+            try:
+                direct = subprocess.run(command, cwd=self.root, env=self.server._environment(),
+                                        capture_output=True, timeout=10,
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                self.fail(f'Job execution timed out: {r}; direct PowerShell '
+                          f'exit={direct.returncode}, out={direct.stdout[:80]!r}, '
+                          f'err={direct.stderr[:120]!r}')
+            except subprocess.TimeoutExpired:
+                self.fail(f'Job and direct PowerShell both timed out: {r}')
         self.assertEqual(r['exit_code'], 0, r)
         self.assertEqual(r['stdout'].strip(), '日本語', r)
 
