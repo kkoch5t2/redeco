@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="456" viewBox="0 0 1000 456" role="img" aria-labelledby="title desc">
+  <title id="title">redecoのシステム構成</title>
+  <desc id="desc">左列はOpenAI側、右列はUbuntuまたはWindows PC。PC側のtunnel-clientがOpenAI側のSecure MCP TunnelへHTTPS接続を開始する。要求と結果は同じトンネルを通る。tunnel-clientは同じPC上のredeco MCPサーバーへループバックHTTPで接続する。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="456" rx="16" fill="#ffffff"/>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" text-anchor="middle">
+    <rect x="24" y="24" width="340" height="408" rx="18" fill="#f8fafc" stroke="#cbd5e1"/>
+    <rect x="592" y="24" width="384" height="408" rx="18" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="194" y="63" font-size="21" font-weight="700" fill="#0f172a">OpenAI側</text>
+    <text x="784" y="63" font-size="21" font-weight="700" fill="#0f172a">Ubuntu / Windows PC（ローカル）</text>
+
+    <g stroke="#475569" stroke-width="2" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)">
+      <path d="M 194 170 V 256"/>
+      <path d="M 334 135 H 622"/>
+      <path d="M 784 170 V 228"/>
+      <path d="M 784 298 V 356"/>
+    </g>
+    <g fill="#f8fafc">
+      <rect x="140" y="201" width="108" height="26"/>
+      <rect x="679" y="187" width="210" height="25"/>
+      <rect x="710" y="315" width="148" height="25"/>
+    </g>
+    <g font-size="17" fill="#475569">
+      <text x="194" y="220">要求・結果</text>
+      <text x="478" y="112" font-size="21" font-weight="700" fill="#0f766e">HTTPS</text>
+      <text x="478" y="164">PC側から接続開始</text>
+      <text x="784" y="205">HTTP · 127.0.0.1</text>
+      <text x="784" y="333">実行・読み書き</text>
+    </g>
+
+    <g fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5">
+      <rect x="54" y="100" width="280" height="70" rx="12"/>
+      <rect x="54" y="256" width="280" height="64" rx="12"/>
+    </g>
+    <g fill="#172554" font-size="22" font-weight="600">
+      <text x="194" y="143">Secure MCP Tunnel</text>
+      <text x="194" y="296">ChatGPT</text>
+    </g>
+    <text x="194" y="377" font-size="16" fill="#64748b">要求と結果をトンネル経由で受け渡し</text>
+
+    <g fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5">
+      <rect x="622" y="100" width="324" height="70" rx="12"/>
+      <rect x="622" y="228" width="324" height="70" rx="12"/>
+      <rect x="622" y="356" width="324" height="60" rx="12"/>
+    </g>
+    <g fill="#064e3b" font-size="22" font-weight="600">
+      <text x="784" y="143">tunnel-client</text>
+      <text x="784" y="271">redeco MCPサーバー</text>
+      <text x="784" y="394">コマンド・ファイル</text>
+    </g>
+  </g>
+</svg>

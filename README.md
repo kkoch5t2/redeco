@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/redeco-icon.jpg" alt="Redecoのアイコン" width="112" height="112">
+<img src="docs/assets/redeco-icon.jpg" alt="redecoのアイコン" width="112" height="112">
 
-# Redeco
+# redeco
+
+Remote Development Connector（リモートデベロップメントコネクター）の略。
 
 **ChatGPTから、Ubuntu・Windowsの開発環境へ。**
 
@@ -19,11 +21,11 @@
 
 ---
 
-Redecoは、ChatGPTから自分のPC上のプロジェクトを操作するためのツールです。PC上でMCP（Model Context Protocol）サーバーを動かし、OpenAI Secure MCP Tunnelを通じてChatGPTへ接続します。
+正式名称は **redeco** です。**Re**mote **De**velopment **Co**nnectorに由来し、ChatGPTから自分のPC上のプロジェクトを操作するためのツールです。PC上でMCP（Model Context Protocol）サーバーを動かし、OpenAI Secure MCP Tunnelを通じてChatGPTへ接続します。
 
 ## できること
 
-| 用途 | Redecoで行う操作 |
+| 用途 | redecoで行う操作 |
 | --- | --- |
 | **コードを読み書きする** | ファイルの一覧・読み取り・作成・置換。既存ファイルの置換時はSHA-256で変更前の内容を確認 |
 | **開発コマンドを実行する** | PCに導入済みのGit、ビルドツール、テストなどを実行し、結果を取得 |
@@ -52,33 +54,9 @@ Ubuntu版にはトンネル設定用のスクリプトがあります。Windows�
 
 ## システム構成
 
-```mermaid
-flowchart LR
-    subgraph cloud["OpenAI側"]
-        direction TB
-        chat["ChatGPT"]
-        tunnel["Secure MCP Tunnel"]
-        chat <-->|"要求・結果"| tunnel
-    end
-    subgraph local["Ubuntu / Windows PC（ローカル）"]
-        direction TB
-        client["tunnel-client"]
-        mcp["Redeco MCP"]
-        files["実行・ファイル"]
-        client <-->|"ローカル接続"| mcp
-        mcp <-->|"実行・読み書き"| files
-    end
-    cloud <-->|"HTTPS"| local
+![redecoのシステム構成：PC側のtunnel-clientとOpenAI側のSecure MCP TunnelをHTTPSで接続](docs/assets/architecture.svg)
 
-    classDef openai fill:#eff6ff,stroke:#93c5fd,color:#172554
-    classDef pc fill:#ecfdf5,stroke:#6ee7b7,color:#064e3b
-    class chat,tunnel openai
-    class client,mcp,files pc
-    style cloud fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
-    style local fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
-```
-
-`tunnel-client`がPC側からOpenAIへHTTPS接続し、同じPC上のMCPサーバーへ要求を転送します。ルーターのポート開放は必要ありません。接続要件は[OpenAI公式のトンネル手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)を参照してください。
+**HTTPSで接続するのは、PC側の `tunnel-client` とOpenAI側の `Secure MCP Tunnel` です。** 接続はPC側から開始し、要求・結果を同じトンネル経由で受け渡します。`tunnel-client` から同じPC上のredeco MCPサーバーへの接続には、ループバックの **HTTP** を使います。ルーターのポート開放は必要ありません。接続要件は[OpenAI公式のトンネル手順](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)を参照してください。
 
 標準の導入スクリプトでのMCP待ち受け先は `http://127.0.0.1:8770/mcp` です。Windowsでポートを変更した場合はトンネルの転送先も合わせます。
 
@@ -116,7 +94,7 @@ flowchart LR
 | `read_process_output` | 標準出力・標準エラーをまとめて取得。前回の `next_offset` を `offset` に指定すると続きを取得 |
 | `write_process_input` | セッションへ追加入力。改行で送信し、PTYではCtrl+C・Ctrl+Dも利用可能 |
 | `stop_process` | そのセッションで管理するプロセスを停止。Ubuntuはシグナル、WindowsはJob Objectを使用 |
-| `list_processes` | Redecoが管理する実行中・完了済みセッションの一覧 |
+| `list_processes` | redecoが管理する実行中・完了済みセッションの一覧 |
 
 `argv`はプログラム名と引数の配列です。シェル構文が必要なら、Ubuntuは`bash`、Windowsは`powershell.exe`や`cmd.exe`を明示します。引数の具体例は各OSの手順に記載しています。
 
@@ -143,7 +121,7 @@ flowchart LR
 | 1回の出力取得 | 最大12,000バイト |
 | 1回の入力 | 最大16,000バイト |
 
-要求した位置の出力がすでに破棄されている場合は `truncated=true` を返します。全ログが必要ならコマンド側でファイルにも保存してください。入力本文はRedecoの監査ログに保存しませんが、実行先のプログラム自身が表示・保存する場合があります。
+要求した位置の出力がすでに破棄されている場合は `truncated=true` を返します。全ログが必要ならコマンド側でファイルにも保存してください。入力本文はredecoの監査ログに保存しませんが、実行先のプログラム自身が表示・保存する場合があります。
 
 対話操作はUbuntuではPTY、Windowsではパイプによる行単位の入力です。WindowsのConPTY・全画面端末・PTYとしてのCtrl+C/Ctrl+Dには対応していません。
 
