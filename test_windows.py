@@ -149,10 +149,16 @@ class WindowsTests(unittest.TestCase):
         self.assertNotIn('CONTROL_PLANE_API_KEY', env)
         self.assertNotIn('GITHUB_TOKEN', env)
         self.assertIn('SYSTEMROOT', {k.upper() for k in env})
-        r = self.server._exec(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
-            '[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output "日本語"'], self.root)
-        self.assertEqual(r['exit_code'], 0)
-        self.assertEqual(r['stdout'].strip(), '日本語')
+        # Windows PowerShell startup occasionally stalls on hosted runners.
+        # Retry only this idempotent probe, never a real user command.
+        command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                   '[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output "日本語"']
+        for attempt in range(2):
+            r = self.server._exec(command, self.root, 15)
+            if r['exit_code'] is not None:
+                break
+        self.assertEqual(r['exit_code'], 0, r)
+        self.assertEqual(r['stdout'].strip(), '日本語', r)
 
     def test_limits_offsets_and_unknown_sessions(self):
         with patch('windows_process_sessions.MAX_ACTIVE', 1):

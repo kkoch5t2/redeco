@@ -94,6 +94,15 @@ class Job:
     def terminate(self):
         check(self.api.TerminateJobObject(self.handle, 1))
 
+    def wait_empty(self, timeout=5):
+        """Wait until all processes in the Job have actually exited."""
+        deadline = time.monotonic() + timeout
+        while self.active():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.02)
+        return True
+
     def close(self):
         if self.handle:
             self.api.CloseHandle(self.handle)

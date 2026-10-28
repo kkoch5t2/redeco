@@ -62,6 +62,9 @@ def execute(argv, cwd, env, timeout, max_output):
             if time.monotonic() >= deadline:
                 timed_out = True
                 job.terminate()
+                # TerminateJobObject is asynchronous: wait for descendants, not
+                # just the helper process, before reporting timeout cleanup.
+                job.wait_empty(timeout=5)
                 break
             time.sleep(.01)
         process.wait(timeout=5)
